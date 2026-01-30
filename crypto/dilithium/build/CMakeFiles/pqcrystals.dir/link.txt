@@ -1,0 +1,2 @@
+/usr/bin/ar qc libpqcrystals.a CMakeFiles/pqcrystals.dir/poly.o CMakeFiles/pqcrystals.dir/sign.o CMakeFiles/pqcrystals.dir/randombytes.o CMakeFiles/pqcrystals.dir/polyvec.o CMakeFiles/pqcrystals.dir/reduce.o CMakeFiles/pqcrystals.dir/rounding.o CMakeFiles/pqcrystals.dir/fips202.o CMakeFiles/pqcrystals.dir/symmetric-shake.o CMakeFiles/pqcrystals.dir/packing.o CMakeFiles/pqcrystals.dir/ntt.o
+/usr/bin/ranlib libpqcrystals.a

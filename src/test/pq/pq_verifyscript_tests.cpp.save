@@ -1,0 +1,133 @@
+nano src/test/pq/pq_verifyscript_tests.cpp#include <boost/test/unit_test.hpp>
+
+#include <script/interpreter.h>
+#include <policy/policy.h>
+#include "primitives/transaction.h"
+#include "script/interpreter.h"
+#include "script/script.h"
+#include "script/script_error.h"
+//#include "script/standard.h"     // STANDARD_SCRIPT_VERIFY_FLAGS
+#include "crypto/dilithium_wrapper.h" // pqcrypto::dilithium::{keygen,sign}
+#include "crypto/dilithium.h"    // DILITHIUM_PUBLICKEYBYTES, DILITHIUM_SIGNATUREBYTES
+#include "consensus/amount.h"
+
+BOOST_AUTO_TEST_SUITE(pq_verifyscript_tests)
+
+static std::vector<unsigned char> ToVec(const uint8_t* p, size_t n)
+{
+    return std::vector<unsigned char>(p, p + n);
+}
+
+static std::span<const std::byte> AsBytes(const std::vector<unsigned char>& v)
+{
+    return {reinterpret_cast<const std::byte*>(v.data()), v.size()};
+}
+BOOST_AUTO_TEST_CASE(pq_checksighash_and_verifyscript_ok)
+{
+    // 1) keys
+    pqcrypto::dilithium::PQPublicKey pub{};
+    pqcrypto::dilithium::PQPrivateKey priv{};
+    pqcrypto::dilithium::keygen(&pub, &priv);
+
+    std::vector<unsigned char> vchPubKey = ToVec(pub.data, DILITHIUM_PUBLICKEYBYTES);
+
+    // 2) prevout scriptPubKey: <pubkey> OP_PQCHECKSIG
+    CScript scriptPubKey = CScript() << vchPubKey << OP_PQCHECKSIG;
+
+    // 3) spending tx (1 input)
+    CMutableTransaction tx;
+//    tx.nVersion = 1;
+    tx.version = 1;
+    tx.vin.resize(1);
+    tx.vout.resize(1);
+
+    // dummy prevout
+    tx.vin[0].prevout.hash = uint256::ZERO;
+    tx.vin[0].prevout.n = 0;
+    tx.vin[0].scriptSig = CScript();
+
+    const CAmount amount = 1 * COIN;
+    tx.vout[0].nValue = amount - 1000;
+    tx.vout[0].scriptPubKey = CScript() << OP_TRUE;
+
+CScript scriptCode = scriptPubKey;
+
+// 5) hashtype
+const int nHashType = SIGHASH_ALL;
+
+CTransaction txConst(tx);
+
+CTransaction txConst(tx);
+uint256 sighash = SignatureHash(scriptPubKey, txConst, 0, SIGHASH_ALL, amount, SigVersion::BASE, nullptr);
+// 6) sign 32-byte sighash
+std::vector<unsigned char> msg(sighash.begin(), sighash.end());
+std::vector<unsigned char> sig;
+BOOST_REQUIRE(pqcrypto::dilithium::sign(&priv, msg.data(), msg.size(), sig));
+
+sig.push_back((unsigned char)nHashType);
+
+// 7) scriptSig pushes: <sig> <pubkey>
+tx.vin[0].scriptSig = CScript() << AsBytes(sig) << AsBytes(vchPubKey);
+    CTransaction txConst(tx);
+    bool ok = VerifyScript(
+        txConst.vin[0].scriptSig,
+        scriptPubKey,
+        /*witness*/ nullptr,
+        flags,
+        TransactionSignatureChecker(&txConst, 0, amount, MissingDataBehavior::ASSERT_FAIL),
+        &err
+    );
+
+    BOOST_CHECK_MESSAGE(ok, ScriptErrorString(err));
+    BOOST_CHECK_EQUAL(err, SCRIPT_ERR_OK);
+}
+
+BOOST_AUTO_TEST_CASE(pq_bad_signature_fails)
+{
+    pqcrypto::dilithium::PQPublicKey pub{};
+    pqcrypto::dilithium::PQPrivateKey priv{};
+    pqcrypto::dilithium::keygen(&pub, &priv);
+
+    std::vector<unsigned char> vchPubKey(pub.data, pub.data + DILITHIUM_PUBLICKEYBYTES);
+    CScript scriptPubKey = CScript() << AsBytes(vchPubKey) << OP_PQCHECKSIG;
+
+    CMutableTransaction tx;
+ //   tx.nVersion = 1;
+    tx.version = 1;
+    tx.vin.resize(1);
+    tx.vout.resize(1);
+    tx.vin[0].prevout.hash = uint256::ZERO;
+    tx.vin[0].prevout.n = 0;
+
+    const CAmount amount = 1 * COIN;
+    tx.vout[0].nValue = amount - 1000;
+    tx.vout[0].scriptPubKey = CScript() << OP_TRUE;
+
+    uint256 sighash = SignatureHash(scriptPubKey, tx, 0, SIGHASH_ALL, amount, SigVersion::BASE, nullptr);
+    std::vector<unsigned char> msg(sighash.begin(), sighash.end());
+
+    std::vector<unsigned char> sig;
+    BOOST_REQUIRE(pqcrypto::dilithium::sign(&priv, msg.data(), msg.size(), sig));
+    sig.push_back((unsigned char)SIGHASH_ALL);
+
+    sig[0] ^= 0x01;
+
+    tx.vin[0].scriptSig = CScript() << AsBytes(sig) << AsBytes(vchPubKey);
+    ScriptError err = SCRIPT_ERR_OK;
+    const unsigned int flags = STANDARD_SCRIPT_VERIFY_FLAGS;
+
+    CTransaction txConst(tx);
+    bool ok = VerifyScript(
+        txConst.vin[0].scriptSig,
+        scriptPubKey,
+        nullptr,
+        flags,
+        TransactionSignatureChecker(&txConst, 0, amount, MissingDataBehavior::ASSERT_FAIL),
+        &err
+    );
+
+    BOOST_CHECK(!ok);
+BOOST_CHECK(err != SCRIPT_ERR_OK);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,60 @@
+--- a/cpu-miner.c
++++ b/cpu-miner.c
+@@ -XXX,XXX +XXX,XXX @@
++static bool opt_qbitx_pq = false;
++
+ static struct option options[] = {
+ 	{ "algo", required_argument, 0, 'a' },
+ 	{ "api-bind", required_argument, 0, 'A' },
+ 	{ "api-listen", no_argument, 0, 'L' },
+ 	{ "api-network", no_argument, 0, 'N' },
+ 	{ "background", no_argument, 0, 'B' },
+ 	{ "benchmark", no_argument, 0, 'b' },
+ 	{ "coinbase-addr", required_argument, 0, 'C' },
++	{ "qbitx-pq", no_argument, 0, 1000 },
+ 	{ "config", required_argument, 0, 'c' },
+ 	{ "cpu-affinity", required_argument, 0, 'q' },
+ 	{ "cpu-priority", required_argument, 0, 'r' },
+@@ -XXX,XXX +XXX,XXX @@
++		case 1000:
++			opt_qbitx_pq = true;
++			break;
+ 	}
+ }
+ 
+--- a/miner.h
++++ b/miner.h
+@@ -XXX,XXX +XXX,XXX @@
++extern bool opt_qbitx_pq;
++
+--- a/util.c
++++ b/util.c
+@@ -XXX,XXX +XXX,XXX @@
++bool opt_qbitx_pq = false;
++
+ // Function to convert base58 address to scriptPubKey
+ // Search for: address_to_script, build_coinbase, create_coinbase_tx
+ // Look for code that builds: 0x76 0xa9 0x14 <20 bytes> 0x88 0xac
+ static void address_to_script(unsigned char *script, int *script_len, const char *addr)
+ {
+ 	// ... existing code to decode base58 address ...
+ 	// Extract 20-byte pubkeyhash from address payload
+ 	unsigned char pubkeyhash[20];
+ 	// ... decode address and extract pubkeyhash ...
+ 	
+ 	// Build P2PKH script: OP_DUP OP_HASH160 <20-byte> OP_EQUALVERIFY OP_CHECKSIG
+ 	script[0] = 0x76;  // OP_DUP
+ 	script[1] = 0xa9;  // OP_HASH160
+ 	script[2] = 0x14;  // Push 20 bytes
+ 	memcpy(&script[3], pubkeyhash, 20);
+ 	script[23] = 0x88;  // OP_EQUALVERIFY
+-	script[24] = 0xac;  // OP_CHECKSIG
++	script[24] = opt_qbitx_pq ? 0xc4 : 0xac;  // OP_CHECKSIGDILITHIUM (0xC4) or OP_CHECKSIG (0xAC)
+ 	*script_len = 25;
+ }
+ 
+--- a/help.h
++++ b/help.h
+@@ -XXX,XXX +XXX,XXX @@
++	"  --qbitx-pq              Use Q-BitX PQ address format (OP_CHECKSIGDILITHIUM) for coinbase\n"
++	"                          Requires --coinbase-addr to be set\n"

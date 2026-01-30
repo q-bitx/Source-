@@ -1,0 +1,17 @@
+build/
+*.o
+*.a
+*.so
+*.dll
+*.exe
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.pro.user
+*.qmlc
+*.jsc
+qrc_qml.cpp
+moc_*.cpp
+*.moc
+ui_*.h
+qrc_*.cpp

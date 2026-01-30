@@ -1,0 +1,4 @@
+/root/genesis/GenesisH0/Q-BitX/src/test/pq/build/CMakeFiles/qbitx_tests.dir
+/root/genesis/GenesisH0/Q-BitX/src/test/pq/build/CMakeFiles/test.dir
+/root/genesis/GenesisH0/Q-BitX/src/test/pq/build/CMakeFiles/edit_cache.dir
+/root/genesis/GenesisH0/Q-BitX/src/test/pq/build/CMakeFiles/rebuild_cache.dir

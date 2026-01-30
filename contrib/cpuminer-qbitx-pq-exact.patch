@@ -1,0 +1,28 @@
+--- a/cpu-miner.c
++++ b/cpu-miner.c
+@@ -XXX,XXX +XXX,XXX @@ (near top, with other static option variables)
++static bool opt_qbitx_pq = false;
++
+@@ -XXX,XXX +XXX,XXX @@ (around line 456, in options array)
+ 	{ "coinbase-addr", 1, NULL, 1016 },
++	{ "qbitx-pq", 0, NULL, 1027 },
+ 	{ "config", required_argument, 0, 'c' },
+@@ -XXX,XXX +XXX,XXX @@ (around line 3264, in switch statement)
+ 	case 1016:  // --coinbase-addr
+ 		opt_coinbase_addr = strdup(optarg);
+ 		break;
++	case 1027:  // --qbitx-pq
++		opt_qbitx_pq = true;
++		break;
+@@ -XXX,XXX +XXX,XXX @@ (in help text function, near --coinbase-addr help)
++		"  --qbitx-pq    build PQ coinbase script for Q-BitX (use 0xc4 instead of 0xac)\n"
+@@ -XXX,XXX +XXX,XXX @@ (in script building function, where script[24] = 0xac)
+ 	script[0] = 0x76;  // OP_DUP
+ 	script[1] = 0xa9;  // OP_HASH160
+ 	script[2] = 0x14;  // Push 20 bytes
+ 	memcpy(&script[3], pubkeyhash, 20);
+ 	script[23] = 0x88;  // OP_EQUALVERIFY
+-	script[24] = 0xac;  // OP_CHECKSIG
++	// Q-BitX PQ P2PKH requires OP_CHECKSIGDILITHIUM (0xC4) instead of OP_CHECKSIG (0xAC)
++	script[24] = opt_qbitx_pq ? 0xc4 : 0xac;  // Use 0xC4 for Q-BitX PQ mode, 0xAC for standard Bitcoin
+ 	*script_len = 25;

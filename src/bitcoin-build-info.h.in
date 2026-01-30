@@ -1,0 +1,12 @@
+// auto-generated file
+#pragma once
+
+#define COPYRIGHT_HOLDERS "%s"
+#define COPYRIGHT_HOLDERS_SUBSTITUTION "Q-BitX Developers"
+
+#define BUILD_GIT_COMMIT "@GIT_COMMIT@"
+#define BUILD_GIT_DATE "@GIT_DATE@"
+#define BUILD_GIT_TAG "@GIT_TAG@"
+
+#define CLIENT_NAME "Q-BitX"
+#define CLIENT_URL "https://qbitx.org"
