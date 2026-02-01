@@ -14,6 +14,27 @@
 
 #include <algorithm>
 
+// Bootstrap retarget clamp: constrained retargeting at early network stages to maintain
+// liveness under low hashrate and avoid block stalls. Emission is strictly via PoW
+// (no premine/dev reward/hidden issuance). From height BOOTSTRAP_RETARGET_HEIGHT
+// the final parameters apply.
+static constexpr int BOOTSTRAP_RETARGET_HEIGHT = 100000;
+static inline int GetRetargetAdjustmentFactor(int nextHeight)
+// Bootstrap difficulty adjustment phase
+//
+// At the initial stage of the network, difficulty retargeting parameters
+// are intentionally constrained to ensure stable operation under low hashrate
+// conditions and to avoid prolonged block stalls.
+//
+// During this phase, coin emission is performed strictly via Proof-of-Work,
+// without premine, developer rewards, or hidden issuance.
+//
+// Starting from block height 100000, the network switches to the final
+// difficulty retargeting parameters as defined by the protocol design.
+{
+    return nextHeight < BOOTSTRAP_RETARGET_HEIGHT ? 2 : 100;
+}
+
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params& params)
 {
 
@@ -106,12 +127,15 @@ unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nF
     if (params.fPowNoRetargeting)
         return pindexLast->nBits;
 
+    const int nextHeight = pindexLast->nHeight + 1;
+    const int retargetFactor = GetRetargetAdjustmentFactor(nextHeight);
+
     // Limit adjustment step
     int64_t nActualTimespan = pindexLast->GetBlockTime() - nFirstBlockTime;
-    if (nActualTimespan < params.nPowTargetTimespan/100)
-        nActualTimespan = params.nPowTargetTimespan/100;
-    if (nActualTimespan > params.nPowTargetTimespan*100)
-        nActualTimespan = params.nPowTargetTimespan*100;
+    if (nActualTimespan < params.nPowTargetTimespan/retargetFactor)
+        nActualTimespan = params.nPowTargetTimespan/retargetFactor;
+    if (nActualTimespan > params.nPowTargetTimespan*retargetFactor)
+        nActualTimespan = params.nPowTargetTimespan*retargetFactor;
 
     // Retarget
     const arith_uint256 bnPowLimit = UintToArith256(params.powLimit);
@@ -136,10 +160,10 @@ unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nF
 old_target.SetCompact(pindexLast->nBits);
 
 arith_uint256 min_target = old_target;
-min_target /= 100;
+min_target /= retargetFactor;
 
 arith_uint256 max_target = old_target;
-max_target *= 100;
+max_target *= retargetFactor;
 
 if (bnNew < min_target) bnNew = min_target;
 if (bnNew > max_target) bnNew = max_target;
