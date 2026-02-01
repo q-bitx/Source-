@@ -102,12 +102,6 @@ bool IsStandard(const CScript& scriptPubKey, const std::optional<unsigned>& max_
         if (vSolutions[0].size() != DILITHIUM_PUBLICKEYBYTES) return false;
     }
 
-    // PQ-only policy (mempool/relay): allow only PQ outputs (+ optional OP_RETURN)
-if (whichType != TxoutType::QBITX_DILITHIUM &&
-    whichType != TxoutType::NULL_DATA) {
-    return false;
-}
-
     return true;
 }
 
@@ -206,17 +200,6 @@ bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
 
         std::vector<std::vector<unsigned char> > vSolutions;
         TxoutType whichType = Solver(prev.scriptPubKey, vSolutions);
-
-        // PQ-only spending policy
-if (whichType != TxoutType::QBITX_DILITHIUM &&
-    whichType != TxoutType::DILITHIUM_PUBKEY &&
-    whichType != TxoutType::DILITHIUM_PUBKEYHASH &&
-    whichType != TxoutType::DILITHIUM_SCRIPTHASH &&
-    whichType != TxoutType::DILITHIUM_WITNESS_V0_KEYHASH &&
-    whichType != TxoutType::DILITHIUM_WITNESS_V0_SCRIPTHASH &&
-    whichType != TxoutType::DILITHIUM_MULTISIG) {
-    return false;
-}
         if (whichType == TxoutType::NONSTANDARD || whichType == TxoutType::WITNESS_UNKNOWN) {
             // WITNESS_UNKNOWN failures are typically also caught with a policy
             // flag in the script interpreter, but it can be helpful to catch
