@@ -8,6 +8,7 @@
 #include <crypto/sha256.h>
 #include <hash.h>
 #include <pubkey.h>
+#include <script/opcodes.h>
 #include <script/script.h>
 #include <script/solver.h>
 #include <uint256.h>
@@ -164,7 +165,8 @@ public:
 
     CScript operator()(const PKHash& keyID) const
     {
-        return CScript() << OP_DUP << OP_HASH160 << ToByteVector(keyID) << OP_EQUALVERIFY << OP_CHECKSIG;
+        // On PQ-only network, descriptor wallets use pkh() which yields PKHash; treat as PQ-P2PKH.
+        return CScript() << OP_DUP << OP_HASH160 << ToByteVector(keyID) << OP_EQUALVERIFY << OP_PQCHECKSIG;
     }
 
     CScript operator()(const ScriptHash& scriptID) const

@@ -95,17 +95,17 @@ static bool MatchPayToDilithiumPubkey(const CScript& script, valtype& pubkey)
     return true;
 }
 
-// Match Dilithium P2PKH: OP_DUP OP_HASH160 <20-byte-hash> OP_EQUALVERIFY OP_CHECKSIGDILITHIUM
+// Match Dilithium P2PKH: OP_DUP OP_HASH160 <20-byte-hash> OP_EQUALVERIFY OP_CHECKSIGDILITHIUM or OP_PQCHECKSIG
 static bool MatchPayToDilithiumPubkeyHash(const CScript& script, valtype& pubkeyhash)
 {
-    // Expected: [OP_DUP] [OP_HASH160] [20] [hash bytes] [OP_EQUALVERIFY] [OP_CHECKSIGDILITHIUM]
+    // Expected: [OP_DUP] [OP_HASH160] [20] [hash bytes] [OP_EQUALVERIFY] [OP_CHECKSIGDILITHIUM or OP_PQCHECKSIG]
     // Size: 1 + 1 + 1 + 20 + 1 + 1 = 25
     if (script.size() != 25) return false;
     if (script[0] != OP_DUP) return false;
     if (script[1] != OP_HASH160) return false;
     if (script[2] != 20) return false;
     if (script[23] != OP_EQUALVERIFY) return false;
-    if (script[24] != OP_CHECKSIGDILITHIUM) return false;
+    if (script[24] != OP_CHECKSIGDILITHIUM && script[24] != OP_PQCHECKSIG) return false;
     
     pubkeyhash = valtype(script.begin() + 3, script.begin() + 23);
     return true;

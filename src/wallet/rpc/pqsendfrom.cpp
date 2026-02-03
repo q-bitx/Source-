@@ -38,9 +38,6 @@ namespace wallet {
 // Non-final sequence value for transaction inputs
 constexpr uint32_t SEQ_NONFINAL = 0xFFFFFFFE;
 
-// Coinbase maturity for regtest (simple constant, Bitcoin-like)
-constexpr int REGTEST_COINBASE_MATURITY = 100;
-
 static bool IsPQScript(const CScript& script)
 {
     std::vector<std::vector<unsigned char>> solutions;
@@ -312,13 +309,9 @@ RPCHelpMan pqsendfrom()
                 // Check if it's a PQ script
                 if (!IsPQScript(out.scriptPubKey)) continue;
                 
-                // Check coinbase maturity if it's a coinbase
-                if (wtx.IsCoinBase()) {
-                    // Calculate confirmations: depth is blocks from tip, confirmations = depth + 1
-                    int confirmations = depth + 1;
-                    if (confirmations < REGTEST_COINBASE_MATURITY) {
-                        continue; // Not matured
-                    }
+                // Skip immature coinbase outputs (depth = confirmations from GetTxDepthInMainChain)
+                if (wtx.IsCoinBase() && depth < COINBASE_MATURITY) {
+                    continue; // Not matured
                 }
                 
                 // Check if already spent (simple check: look for spends in wallet)
@@ -344,11 +337,8 @@ RPCHelpMan pqsendfrom()
         }
 
         if (availableUTXOs.empty()) {
-            throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, 
-                strprintf("No spendable PQ/Dilithium UTXOs found for address '%s'. "
-                         "This may be because: (1) the address has no funds, (2) all funds are in immature coinbase transactions (need %d confirmations), "
-                         "or (3) all UTXOs are already spent. Use getaddressbalances to check your balance.",
-                         fromAddress, REGTEST_COINBASE_MATURITY));
+            throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS,
+                "No mature coins available. Coinbase outputs require 100 confirmations.");
         }
 
         // Simple UTXO selection: pick first one if sufficient, otherwise accumulate
@@ -400,7 +390,7 @@ RPCHelpMan pqsendfrom()
                     FormatMoney(amount + fee),
                     FormatMoney(amount),
                     FormatMoney(fee),
-                    REGTEST_COINBASE_MATURITY));
+                    COINBASE_MATURITY));
         }
         
         if (changeIsDust) {
