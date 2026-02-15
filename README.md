@@ -4,7 +4,8 @@ Q-BitX (QBX) is a Bitcoin Core–derived blockchain that experiments with post-q
 
 This repository contains the reference node (qbitx) and CLI (qbitx-cli).
 
-> Status: experimental / testnet-grade. Use at your own risk.
+> Status: mainnet
+
 
 ---
 
