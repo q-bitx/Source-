@@ -44,38 +44,36 @@ Use WSL2 or build with a proper toolchain (advanced).
 
 ---
 
-## Build (Linux)
+### Build (Linux)
 
-# Open PowerShell and run:
-# On first launch, Ubuntu will ask you to create a UNIX username and password.
-wsl --install ⎘
-bash ⎘
+### Open PowerShell and run:
+### On first launch, Ubuntu will ask you to create a UNIX username and password.
+wsl --install 
+bash 
 
-# Download binaries
+### Download binaries
 
-wget https://github.com/qbitx/qbitx/releases/latest/download/qbitx-linux-x86_64.zip ⎘
+wget https://github.com/qbitx/qbitx/releases/latest/download/qbitx-linux-x86_64.zip 
 
-sudo apt update ⎘
-sudo apt install -y unzip wget ⎘
-unzip qbitx-linux-x86_64.zip ⎘
-chmod +x qbitx qbitx-cli ⎘
-apt-get update ⎘
-apt-get install -y libevent-2.1-7 ⎘
-apt-get update ⎘
-apt-get install -y libleveldb1d ⎘
-apt-get install -y libevent-pthreads-2.1-7t64 ⎘
+sudo apt update 
+sudo apt install -y unzip wget 
+unzip qbitx-linux-x86_64.zip 
+chmod +x qbitx qbitx-cli 
+apt-get update 
+apt-get install -y libevent-2.1-7 
+apt-get update 
+apt-get install -y libleveldb1d 
+apt-get install -y libevent-pthreads-2.1-7t64 
 
-# Create Configuration Directory
-mkdir -p ~/.qbitx ⎘
+### Create Configuration Directory
+mkdir -p ~/.qbitx 
 
-# Mainnet Configuration
-# Click to copy all
-cat > ~/.qbitx/qbitx.conf <<'EOF' ⎘
+
+cat > ~/.qbitx/qbitx.conf <<'EOF' 
 server=1
 daemon=0
 txindex=1
 
-# RPC 
 rpcbind=127.0.0.1
 rpcallowip=127.0.0.1
 port=8334
@@ -83,37 +81,36 @@ listen=1
 
 rpcuser=qbx 
 rpcpassword=qbxpass
-# Logs
 printtoconsole=0
 maxconnections=32
 
 EOF
 
-# run qbitx
-./qbitx ⎘
+### run qbitx
+./qbitx 
 
-# If the node is running correctly, you will see the current block height and network status.
-./qbitx-cli  getblockchaininfo ⎘
+### If the node is running correctly, you will see the current block height and network status.
+./qbitx-cli  getblockchaininfo 
 
-# Create a New Wallet
-./qbitx-cli  createwallet "pqwallet" ⎘
-./qbitx-cli  listwallets ⎘
+### Create a New Wallet
+./qbitx-cli  createwallet "pqwallet" 
+./qbitx-cli  listwallets 
 
-# Generating Mining Address
-./qbitx-cli -rpcwallet=pqwallet getnewaddress "" pq ⎘
-# balances
-./qbitx-cli -rpcwallet=pqwallet getaddressbalances ⎘
+### Generate wallet
+./qbitx-cli -rpcwallet=pqwallet getnewaddress "" pq 
+### balances
+./qbitx-cli -rpcwallet=pqwallet getaddressbalances 
 
-# Backup Your Wallet
-# The wallet stores a set of individual private keys.
-# The backup is wallet.dat with these keys.
-# All new addresses created after the backup will be lost
+### Backup Your Wallet
+### The wallet stores a set of individual private keys.
+### The backup is wallet.dat with these keys.
+### All new addresses created after the backup will be lost
 
-./qbitx-cli -rpcwallet=pqwallet backupwallet ~/.qbitx/backup_$(date +%Y%m%d_%H%M%S) ⎘
+./qbitx-cli -rpcwallet=pqwallet backupwallet ~/.qbitx/backup_$(date +%Y%m%d_%H%M%S) 
 
-# restore wallet for example
-./qbitx-cli restorewallet pqwallet /home/sus/wallet/pqwallet ⎘
+### restore wallet for example
+./qbitx-cli restorewallet pqwallet /home/sus/wallet/pqwallet 
 
-# For send coins 
-# there are three types of fee - low\normal\high
-./qbitx-cli -rpcwallet=pqwallet pqsendfrom "FROMYOURADDRESS"  "TOADDRESS" 5.0 normal ⎘
+### For send coins 
+### there are three types of fee - low\normal\high
+./qbitx-cli -rpcwallet=pqwallet pqsendfrom "FROMYOURADDRESS"  "TOADDRESS" 5.0 normal 
