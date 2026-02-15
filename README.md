@@ -11,33 +11,33 @@ This repository contains the reference node (qbitx) and CLI (qbitx-cli).
 
 ## Key features
 
-- SHA256d Proof-of-Work (ASIC/CPU/GPU compatible *for hashing*).
-- Post-quantum signatures (Dilithium / ML-DSA) integrated into script validation.
-- PQ output types (Dilithium pubkey / pubkeyhash variants).
-- RPC helpers for PQ workflow (e.g. pqsendfrom).
-- Conservative defaults focused on decentralization and DoS safety.
+ SHA256d Proof-of-Work (ASIC/CPU/GPU compatible *for hashing*).
+ Post-quantum signatures (Dilithium / ML-DSA) integrated into script validation.
+ PQ output types (Dilithium pubkey / pubkeyhash variants).
+ RPC helpers for PQ workflow (e.g. pqsendfrom).
+ Conservative defaults focused on decentralization and DoS safety.
 
 ---
 
 ## What this is / what this is not
 
-✅ This is a Bitcoin-style chain that:
-- mines blocks with SHA256d
-- validates and spends PQ scripts
+ This is a Bitcoin-style chain that:
+ mines blocks with SHA256d
+ validates and spends PQ scripts
 
-❌ This is not (yet):
-- SegWit / witness-enabled chain (planned/optional future upgrade)
-- a production-hardened wallet ecosystem
-- audited software
+ This is not (yet):
+ SegWit / witness-enabled chain (planned/optional future upgrade)
+ a production-hardened wallet ecosystem
+ audited software
 
 ---
 
 ## Requirements
 
 ### Linux (recommended)
-- CMake + Ninja
-- C++ compiler toolchain
-- Boost, OpenSSL, libevent, sqlite (and usual Bitcoin Core deps)
+ CMake + Ninja
+ C++ compiler toolchain
+ Boost, OpenSSL, libevent, sqlite (and usual Bitcoin Core deps)
 
 ### Windows
 Use WSL2 or build with a proper toolchain (advanced).
