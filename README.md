@@ -1,4 +1,4 @@
-# Q-BitX (QBX) — Post-Quantum Bitcoin-style chain (Dilithium / ML-DSA)
+# Q-BitX (QBX) — Post-Quantum chain (Dilithium / ML-DSA)
 
 Q-BitX (QBX) is a Bitcoin Core–derived blockchain that experiments with post-quantum signatures using Dilithium (ML-DSA) while keeping SHA256d PoW mining.
 
