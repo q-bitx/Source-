@@ -52,8 +52,7 @@ wsl --install
 bash 
 
 ### Download binaries
-
-wget https://github.com/qbitx/qbitx/releases/latest/download/qbitx-linux-x86_64.zip 
+ 
 
 sudo apt update 
 sudo apt install -y unzip wget 
