@@ -11,7 +11,7 @@
 #include <util/string.h>
 #include <util/time.h>
 
-#ifndef WIN32
+#ifndef _WIN32
 #include <sys/stat.h>
 #else
 #include <compat/compat.h>
@@ -70,32 +70,31 @@ void SetupEnvironment()
 #endif
     // On most POSIX systems (e.g. Linux, but not BSD) the environment's locale
     // may be invalid, in which case the "C.UTF-8" locale is used as fallback.
-#if !defined(WIN32) && !defined(__APPLE__) && !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__NetBSD__)
+
+#if !defined(_WIN32) && !defined(APPLE) && !defined(FreeBSD) && !defined(__OpenBSD__)
     try {
-        std::locale(""); // Raises a runtime error if current locale is invalid
+        std::locale("");
     } catch (const std::runtime_error&) {
         setenv("LC_ALL", "C.UTF-8", 1);
     }
-#elif defined(WIN32)
-    // Set the default input/output charset is utf-8
+#elif defined(_WIN32)
     SetConsoleCP(CP_UTF8);
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
-#ifndef WIN32
+#ifndef _WIN32
     constexpr mode_t private_umask = 0077;
     umask(private_umask);
 #endif
 }
-
 bool SetupNetworking()
 {
-#ifdef WIN32
-    // Initialize Windows Sockets
+#ifdef _WIN32
     WSADATA wsadata;
     int ret = WSAStartup(MAKEWORD(2,2), &wsadata);
-    if (ret != NO_ERROR || LOBYTE(wsadata.wVersion ) != 2 || HIBYTE(wsadata.wVersion) != 2)
+    if (ret != NO_ERROR || LOBYTE(wsadata.wVersion) != 2 || HIBYTE(wsadata.wVersion) != 2) {
         return false;
+    }
 #endif
     return true;
 }

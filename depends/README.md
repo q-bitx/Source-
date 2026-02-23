@@ -14,11 +14,16 @@ For example:
 
 **When configuring Bitcoin Core, CMake by default will ignore the depends output.** In
 order for it to pick up libraries, tools, and settings from the depends build,
-you must specify the toolchain file.
+you must specify the toolchain file or the depends prefix.
 In the above example, a file named `depends/x86_64-w64-mingw32/toolchain.cmake` will be
 created. To use it during configuring Bitcoin Core:
 
     cmake -B build --toolchain depends/x86_64-w64-mingw32/toolchain.cmake
+
+**LevelDB:** The build must use LevelDB from the depends prefix (never from `/usr/local`).
+Run `make -C depends` first, then configure with `-DCMAKE_PREFIX_PATH=<depends_prefix>` or
+`-DQBITX_DEPENDS_PREFIX=<depends_prefix>` (e.g. `depends/x86_64-pc-linux-gnu`), or use the
+depends toolchain file so LevelDB and other deps are found automatically.
 
 Common `host-platform-triplet`s for cross compilation are:
 

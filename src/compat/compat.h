@@ -6,16 +6,25 @@
 #ifndef BITCOIN_COMPAT_COMPAT_H
 #define BITCOIN_COMPAT_COMPAT_H
 
+#ifdef WIN32
+// Define these BEFORE any Windows headers to reduce bloat and avoid macro pollution.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 // Windows defines FD_SETSIZE to 64 (see _fd_types.h in mingw-w64),
 // which is too small for our usage, but allows us to redefine it safely.
 // We redefine it to be 1024, to match glibc, see typesizes.h.
-#ifdef WIN32
 #ifdef FD_SETSIZE
 #undef FD_SETSIZE
 #endif
 #define FD_SETSIZE 1024
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #include <cstdint>
 #else
 #include <arpa/inet.h>   // IWYU pragma: export
@@ -68,6 +77,39 @@ typedef unsigned int SOCKET;
 // We define MAX_PATH for use on non-Windows systems.
 #ifndef WIN32
 #define MAX_PATH            1024
+#endif
+
+// ---- Windows macro pollution cleanup ----
+#ifdef DELETE
+#undef DELETE
+#endif
+
+#ifdef ERROR
+#undef ERROR
+#endif
+
+#ifdef interface
+#undef interface
+#endif
+
+#ifdef min
+#undef min
+#endif
+
+#ifdef max
+#undef max
+#endif
+
+#ifdef IN
+#undef IN
+#endif
+
+#ifdef OUT
+#undef OUT
+#endif
+
+#ifdef WAIT_TIMEOUT
+#undef WAIT_TIMEOUT
 #endif
 
 // ssize_t is POSIX, and not present when using MSVC.

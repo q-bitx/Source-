@@ -160,7 +160,7 @@ qt_packages_$(NO_QT) = $(qt_packages) $(qt_$(host_os)_packages) $(qt_$(host_arch
 qt_native_packages_$(NO_QT) = $(qt_native_packages)
 
 bdb_packages_$(NO_BDB) = $(bdb_packages)
-wallet_packages_$(NO_WALLET) = $(bdb_packages_) $(sqlite_packages)
+wallet_packages_$(NO_WALLET) = $(bdb_packages_) $(sqlite_packages) $(leveldb_packages)
 
 zmq_packages_$(NO_ZMQ) = $(zmq_packages)
 multiprocess_packages_$(MULTIPROCESS) = $(multiprocess_packages)

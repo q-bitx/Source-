@@ -1,6 +1,10 @@
 # Must be included before CMAKE_INSTALL_INCLUDEDIR is used.
 include(GNUInstallDirs)
 
+if(TARGET secp256k1)
+  return()
+endif()
+
 add_library(secp256k1_precomputed OBJECT EXCLUDE_FROM_ALL
   precomputed_ecmult.c
   precomputed_ecmult_gen.c

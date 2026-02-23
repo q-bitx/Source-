@@ -17,6 +17,7 @@ endif
 
 bdb_packages=bdb
 sqlite_packages=sqlite
+leveldb_packages=leveldb
 
 zmq_packages=zeromq
 
