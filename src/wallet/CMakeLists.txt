@@ -15,13 +15,14 @@ add_library(bitcoin_wallet STATIC EXCLUDE_FROM_ALL
   fees.cpp
   interfaces.cpp
   load.cpp
-  migrate.cpp
+  $<$<BOOL:${USE_BDB}>:migrate.cpp>
   receive.cpp
   rpc/addressbalances.cpp
   rpc/addresses.cpp
   rpc/backup.cpp
   rpc/dilithium.cpp
   rpc/pqsendfrom.cpp
+  rpc/pqsendto.cpp
   rpc/coins.cpp
   rpc/encrypt.cpp
   rpc/signmessage.cpp
