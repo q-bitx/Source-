@@ -1,5 +1,6 @@
 #include "walletmanager.h"
 #include "settingsmanager.h"
+#include "clibridge.h"
 #include "pathutil.h"
 #include <QDir>
 #include <QFileInfo>
@@ -17,11 +18,227 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 
-WalletManager::WalletManager(SettingsManager *settings, QObject *parent)
+WalletManager::WalletManager(SettingsManager *settings, CliBridge *cliBridge, QObject *parent)
     : QObject(parent)
     , m_settings(settings)
+    , m_cliBridge(cliBridge)
     , m_walletBusy(false)
 {
+    if (m_cliBridge) {
+        connect(m_cliBridge, &CliBridge::success, this, &WalletManager::onCliSuccess);
+        connect(m_cliBridge, &CliBridge::errorOccurred, this, &WalletManager::onCliError);
+    }
+}
+
+void WalletManager::setLastError(const QString &err)
+{
+    if (m_lastError != err) {
+        m_lastError = err;
+        emit lastErrorChanged();
+    }
+}
+
+void WalletManager::setLastInfo(const QString &info)
+{
+    if (m_lastInfo != info) {
+        m_lastInfo = info;
+        emit lastInfoChanged();
+    }
+}
+
+QString WalletManager::backupBasePath() const
+{
+#ifdef Q_OS_WIN
+    QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (base.isEmpty())
+        base = QDir::homePath();
+#else
+    QString base = QDir::homePath();
+#endif
+    return base;
+}
+
+void WalletManager::onCliSuccess(const QVariant &result)
+{
+    if (!m_cliBridge || !m_settings)
+        return;
+    QString method = m_pendingMethod;
+    m_pendingMethod.clear();
+    setWalletBusy(false);
+
+    if (method == "listwallets") {
+        QStringList list;
+        if (result.canConvert<QVariantList>()) {
+            for (const QVariant &v : result.value<QVariantList>()) {
+                list << v.toString();
+            }
+        }
+        if (m_loadedWallets != list) {
+            m_loadedWallets = list;
+            emit loadedWalletsChanged();
+            emit walletsChanged();
+        }
+        setLastError(QString());
+        setLastInfo(QString("Wallets refreshed."));
+        return;
+    }
+
+    if (method == "createwallet") {
+        setLastError(QString());
+        setLastInfo(QString("Wallet created."));
+        refreshWallets();
+        return;
+    }
+
+    if (method == "loadwallet") {
+        setLastError(QString());
+        setLastInfo(QString("Wallet loaded."));
+        refreshWallets();
+        return;
+    }
+
+    if (method == "backupwallet") {
+        setLastError(QString());
+        QString path = result.value<QVariantMap>().value("backup_path").toString();
+        QString name = m_pendingBackupWalletName;
+        m_pendingBackupWalletName.clear();
+        if (path.isEmpty())
+            setLastInfo(name.isEmpty() ? QString("Backup completed.") : QString("Backup saved for wallet %1.").arg(name));
+        else
+            setLastInfo(name.isEmpty() ? QString("Backup saved to: %1").arg(path) : QString("Backup saved for wallet %1 to: %2").arg(name, path));
+        m_lastBackupPath.clear();
+        return;
+    }
+
+    if (method == "restorewallet") {
+        setLastError(QString());
+        setLastInfo(QString("Wallet restored."));
+        refreshWallets();
+        return;
+    }
+}
+
+void WalletManager::onCliError(const QString &errorMessage)
+{
+    if (!m_cliBridge || !m_settings)
+        return;
+    QString method = m_pendingMethod;
+    m_pendingMethod.clear();
+    setWalletBusy(false);
+
+    QString friendly = errorMessage;
+    if (method == "backupwallet" && !m_pendingBackupWalletName.isEmpty()) {
+        friendly = QString("Backup failed for wallet %1: %2").arg(m_pendingBackupWalletName, errorMessage);
+        m_pendingBackupWalletName.clear();
+    } else if (errorMessage.contains("-18") || errorMessage.contains("not found", Qt::CaseInsensitive) || errorMessage.contains("No wallet", Qt::CaseInsensitive)) {
+        friendly = QString("No wallet loaded. Create or restore a wallet, then load it.");
+    }
+    setLastError(friendly);
+    setLastInfo(QString());
+}
+
+void WalletManager::refreshWallets()
+{
+    if (!m_cliBridge || !m_settings || m_settings->effectiveQbitxCliPath().isEmpty()) {
+        setLastError(QString());
+        return;
+    }
+    setWalletBusy(true);
+    m_pendingMethod = QString("listwallets");
+    m_cliBridge->call("listwallets", QStringList(), QString());
+}
+
+void WalletManager::createWallet(const QString &name)
+{
+    if (!m_cliBridge || !m_settings || m_settings->effectiveQbitxCliPath().isEmpty()) {
+        setLastError("qbitx-cli not configured.");
+        return;
+    }
+    if (name.trimmed().isEmpty()) {
+        setLastError("Wallet name is empty.");
+        return;
+    }
+    setWalletBusy(true);
+    m_pendingMethod = QString("createwallet");
+    m_cliBridge->call("createwallet", QStringList() << name.trimmed(), QString());
+}
+
+void WalletManager::loadWallet(const QString &name)
+{
+    if (!m_cliBridge || !m_settings || m_settings->effectiveQbitxCliPath().isEmpty()) {
+        setLastError("qbitx-cli not configured.");
+        return;
+    }
+    if (name.trimmed().isEmpty()) {
+        setLastError("Select a wallet to load.");
+        return;
+    }
+    setWalletBusy(true);
+    m_pendingMethod = QString("loadwallet");
+    m_cliBridge->call("loadwallet", QStringList() << name.trimmed(), QString());
+}
+
+void WalletManager::backupWallet(const QString &walletName)
+{
+    if (!m_cliBridge || !m_settings || m_settings->effectiveQbitxCliPath().isEmpty()) {
+        setLastError("qbitx-cli not configured.");
+        return;
+    }
+    QString name = walletName.trimmed();
+    if (name.isEmpty() || !m_loadedWallets.contains(name)) {
+        setLastError("Select a loaded wallet to backup.");
+        return;
+    }
+    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
+    QString relRoot = QString("backups/backup_%1").arg(timestamp);
+    QDir dir;
+    if (!dir.mkpath(relRoot)) {
+        setLastError(QString("Failed to create backup directory: %1").arg(relRoot));
+    }
+    setWalletBusy(true);
+    m_pendingMethod = QString("backupwallet");
+    m_pendingBackupWalletName = name;
+    m_cliBridge->call("backupwallet", QStringList() << relRoot, name);
+}
+
+void WalletManager::restoreWallet(const QString &name, const QString &folderPath)
+{
+    if (!m_cliBridge || !m_settings || m_settings->effectiveQbitxCliPath().isEmpty()) {
+        setLastError("qbitx-cli not configured.");
+        return;
+    }
+    if (name.trimmed().isEmpty()) {
+        setLastError("Wallet name is empty.");
+        return;
+    }
+    if (folderPath.trimmed().isEmpty()) {
+        setLastError("Restore folder path is empty.");
+        return;
+    }
+    QString nativePath = QDir::toNativeSeparators(folderPath.trimmed());
+    setWalletBusy(true);
+    m_pendingMethod = QString("restorewallet");
+    m_cliBridge->call("restorewallet", QStringList() << name.trimmed() << nativePath, QString());
+}
+
+void WalletManager::restoreWalletFromFolder(const QString &folderPath)
+{
+    QString path = folderPath.trimmed();
+    if (path.isEmpty()) {
+        setLastError("Restore folder path is empty.");
+        return;
+    }
+    QString baseName = QFileInfo(path).fileName();
+    if (baseName.isEmpty() || baseName == "." || baseName == "..")
+        baseName = QString("restored");
+    baseName = sanitizeWalletName(baseName);
+    QString name = baseName;
+    int suffix = 1;
+    while (m_loadedWallets.contains(name)) {
+        name = baseName + "_" + QString::number(suffix);
+        ++suffix;
+    }
+    restoreWallet(name, path);
 }
 
 void WalletManager::setWalletBusy(bool busy)
@@ -201,7 +418,7 @@ void WalletManager::importWalletFromPath(const QString &sourcePath, const QStrin
     emit walletImported(finalWalletName);
 }
 
-QVariantMap WalletManager::backupWalletToPath(const QString &backupDir)
+QVariantMap WalletManager::backupWalletToPath(const QString &backupDir, const QString &walletName)
 {
     QVariantMap result;
     result["ok"] = false;
@@ -215,17 +432,17 @@ QVariantMap WalletManager::backupWalletToPath(const QString &backupDir)
         return result;
     }
 
-    QString activeWallet = m_settings->activeWallet();
-    if (activeWallet.isEmpty()) {
-        result["error"] = "No active wallet to backup";
-        emit errorOccurred("No active wallet to backup");
+    QString name = walletName.trimmed();
+    if (name.isEmpty()) {
+        result["error"] = "Wallet name is required for backup";
+        emit errorOccurred("Wallet name is required for backup");
         return result;
     }
 
-    QString walletPath = getWalletPath(activeWallet);
+    QString walletPath = getWalletPath(name);
     if (walletPath.isEmpty() || !QDir(walletPath).exists()) {
-        result["error"] = "Wallet directory not found: " + activeWallet;
-        emit errorOccurred("Wallet directory not found: " + activeWallet);
+        result["error"] = "Wallet directory not found: " + name;
+        emit errorOccurred("Wallet directory not found: " + name);
         return result;
     }
 
@@ -290,7 +507,7 @@ QVariantMap WalletManager::backupWalletToPath(const QString &backupDir)
 
     // Step 3: Create timestamped backup directory name
     QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
-    QString backupPath = resolvedBackupDir + "/" + activeWallet + "-backup-" + timestamp;
+    QString backupPath = resolvedBackupDir + "/" + name + "-backup-" + timestamp;
 
     qDebug() << "Backup wallet - Source:" << walletPath << "Destination:" << backupPath;
 
@@ -337,11 +554,11 @@ QVariantMap WalletManager::backupWalletToPath(const QString &backupDir)
     return result;
 }
 
-void WalletManager::exitWallet(bool deleteLocalCopy)
+void WalletManager::exitWallet(bool deleteLocalCopy, const QString &walletName)
 {
-    QString activeWallet = m_settings->activeWallet();
-    if (activeWallet.isEmpty()) {
-        emit errorOccurred("No active wallet loaded");
+    QString name = walletName.trimmed();
+    if (name.isEmpty()) {
+        emit errorOccurred("Wallet name is required");
         return;
     }
 
@@ -362,9 +579,9 @@ void WalletManager::exitWallet(bool deleteLocalCopy)
         QString walletPath;
         QDir walletsDir(datadir + "/wallets");
         if (walletsDir.exists()) {
-            walletPath = datadir + "/wallets/" + activeWallet;
+            walletPath = datadir + "/wallets/" + name;
         } else {
-            walletPath = datadir + "/" + activeWallet;
+            walletPath = datadir + "/" + name;
         }
         
         if (QDir(walletPath).exists()) {
@@ -974,33 +1191,9 @@ QString WalletManager::getWalletDatPath(const QString &walletName)
         return QString();
     }
     
-    // Get datadir (prefer configured, otherwise use default)
     QString datadir = m_settings->datadir();
     if (datadir.isEmpty()) {
-        // Default datadir paths per platform
-        QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
-        if (homePath.isEmpty()) {
-            return QString();
-        }
-        
-#ifdef Q_OS_WIN
-        // Windows: %APPDATA%\QBitX
-        QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        if (!appDataPath.isEmpty()) {
-            // Remove the app name from AppDataLocation (it includes "qbitx-gui")
-            QDir appDataDir(appDataPath);
-            appDataDir.cdUp();
-            datadir = appDataDir.absoluteFilePath("QBitX");
-        } else {
-            datadir = homePath + "/AppData/Roaming/QBitX";
-        }
-#elif defined(Q_OS_MACOS)
-        // macOS: ~/Library/Application Support/QBitX
-        datadir = homePath + "/Library/Application Support/QBitX";
-#else
-        // Linux: ~/.qbitx
-        datadir = homePath + "/.qbitx";
-#endif
+        return QString();
     }
     
     // Check if wallets/ subdirectory exists
@@ -1020,7 +1213,7 @@ QString WalletManager::getWalletDatPath(const QString &walletName)
     return QString();
 }
 
-QVariantMap WalletManager::backupWalletToFile(const QString &destinationPath)
+QVariantMap WalletManager::backupWalletToFile(const QString &destinationPath, const QString &walletName)
 {
     QVariantMap result;
     result["ok"] = false;
@@ -1032,9 +1225,9 @@ QVariantMap WalletManager::backupWalletToFile(const QString &destinationPath)
         return result;
     }
     
-    QString activeWallet = m_settings->activeWallet();
-    if (activeWallet.isEmpty()) {
-        result["error"] = "No active wallet selected";
+    QString name = walletName.trimmed();
+    if (name.isEmpty()) {
+        result["error"] = "Wallet name is required";
         return result;
     }
     
@@ -1044,36 +1237,12 @@ QVariantMap WalletManager::backupWalletToFile(const QString &destinationPath)
     }
     
     // Get source wallet.dat path
-    QString sourcePath = getWalletDatPath(activeWallet);
+    QString sourcePath = getWalletDatPath(name);
     if (sourcePath.isEmpty()) {
-        // Construct expected path for error message
         QString datadir = m_settings->datadir();
-        QString expectedPath;
-        if (datadir.isEmpty()) {
-            // Use default datadir path
-            QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
-            if (!homePath.isEmpty()) {
-#ifdef Q_OS_WIN
-                QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-                if (!appDataPath.isEmpty()) {
-                    QDir appDataDir(appDataPath);
-                    appDataDir.cdUp();
-                    datadir = appDataDir.absoluteFilePath("QBitX");
-                } else {
-                    datadir = homePath + "/AppData/Roaming/QBitX";
-                }
-#elif defined(Q_OS_MACOS)
-                datadir = homePath + "/Library/Application Support/QBitX";
-#else
-                datadir = homePath + "/.qbitx";
-#endif
-            }
-        }
-        if (!datadir.isEmpty()) {
-            expectedPath = datadir + "/wallets/" + activeWallet + "/wallet.dat";
-        } else {
-            expectedPath = QString("<datadir>/wallets/%1/wallet.dat").arg(activeWallet);
-        }
+        QString expectedPath = datadir.isEmpty()
+            ? QString("<datadir>/wallets/%1/wallet.dat").arg(name)
+            : (datadir + "/wallets/" + name + "/wallet.dat");
         result["error"] = QString("wallet.dat not found at %1").arg(expectedPath);
         return result;
     }
@@ -1115,10 +1284,8 @@ QVariantMap WalletManager::backupWalletToFile(const QString &destinationPath)
     return result;
 }
 
-QVariantMap WalletManager::autoBackupCurrentWallet()
+QVariantMap WalletManager::autoBackupCurrentWallet(const QString &walletName)
 {
-    // This function is kept for backward compatibility but now uses filesystem backup
-    // It generates a default filename and calls backupWalletToFile
     QVariantMap result;
     result["ok"] = false;
     result["backupPath"] = QString();
@@ -1129,9 +1296,9 @@ QVariantMap WalletManager::autoBackupCurrentWallet()
         return result;
     }
     
-    QString activeWallet = m_settings->activeWallet();
-    if (activeWallet.isEmpty()) {
-        result["error"] = "No active wallet selected";
+    QString name = walletName.trimmed();
+    if (name.isEmpty()) {
+        result["error"] = "Wallet name is required";
         return result;
     }
     
@@ -1144,14 +1311,13 @@ QVariantMap WalletManager::autoBackupCurrentWallet()
     
     // Generate default filename: qbitx_wallet_<walletName>_YYYYMMDD.dat
     QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd");
-    QString backupFileName = QString("qbitx_wallet_%1_%2.dat").arg(activeWallet).arg(timestamp);
+    QString backupFileName = QString("qbitx_wallet_%1_%2.dat").arg(name).arg(timestamp);
     QString backupPath = backupDir + "/" + backupFileName;
     
-    // Use filesystem backup
-    return backupWalletToFile(backupPath);
+    return backupWalletToFile(backupPath, name);
 }
 
-QVariantMap WalletManager::backupWallet(const QString &walletName)
+QVariantMap WalletManager::backupWalletToDefaultDirectory(const QString &walletName)
 {
     QVariantMap result;
     result["ok"] = false;
@@ -1168,7 +1334,7 @@ QVariantMap WalletManager::backupWallet(const QString &walletName)
         return result;
     }
     
-    QString qbitxCliPath = m_settings->qbitxCliPath();
+    QString qbitxCliPath = m_settings->effectiveQbitxCliPath();
     if (qbitxCliPath.isEmpty()) {
         result["error"] = "qbitx-cli path not configured";
         return result;
@@ -1250,7 +1416,7 @@ QVariantMap WalletManager::backupWallet(const QString &walletName)
     int exitCode = process.exitCode();
     QByteArray stdoutBytes = process.readAllStandardOutput();
     QByteArray stderrBytes = process.readAllStandardError();
-    QString stderr = QString::fromUtf8(stderrBytes).trimmed();
+    QString stderrStr = QString::fromUtf8(stderrBytes).trimmed();
     
     // Success = process exitCode == 0
     if (exitCode == 0) {
@@ -1271,7 +1437,7 @@ QVariantMap WalletManager::backupWallet(const QString &walletName)
         return result;
     } else {
         // On failure show stderr / error message only
-        QString errorMsg = stderr.isEmpty() ? QString("qbitx-cli backupwallet failed with exit code %1").arg(exitCode) : stderr;
+        QString errorMsg = stderrStr.isEmpty() ? QString("qbitx-cli backupwallet failed with exit code %1").arg(exitCode) : stderrStr;
         result["error"] = errorMsg;
         emit errorOccurred(errorMsg);
         return result;

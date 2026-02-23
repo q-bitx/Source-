@@ -1,264 +1,155 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import "../components" 1.0
 
 Page {
     id: addressesPage
 
     property var addressList: []
-    property var addressBalancesMap: ({})
-    property var fullAddressList: []
-    property var addressBalancesList: []
     property bool isLoading: false
     property string lastGeneratedAddress: ""
-    property int pendingRequests: 0
-    property bool hasFullList: false
-    property bool hasBalances: false
     property bool walletBusy: walletManager ? walletManager.walletBusy : false
-    property bool hasWallet: settingsManager ? (settingsManager.activeWallet !== "") : false
+    property string selectedWallet: ""
+    property string lastStatusMessage: ""
+    property string generateDialogChosenWallet: ""
+    property var walletSummary: ({ confirmed: "0 QBX", unconfirmed: "0 QBX", immature: "0 QBX", total: "0 QBX" })
 
-    function checkAndMerge() {
-        if (pendingRequests === 0) {
-            // MONOTONIC RULE: Merge whatever data we have, treat failures as "empty wallet"
-            if (hasFullList || hasBalances) {
-                mergeAddressData()  // Show partial or complete data
-            } else {
-                // Both RPC calls failed = "loaded wallet with empty addresses", NOT "unloaded wallet"
-                addressList = []    // Show empty list, keep wallet active
-            }
-            isLoading = false
-            // Individual error handlers manage errorLabel - never clear activeWallet
-        }
+    // Table columns: numeric only (no "QBX"). Use for Confirmed / Unconfirmed / Immature / Total cells.
+    function formatAmountNumber(v) {
+        if (v === undefined || v === null || v === "") return "0"
+        var s = (typeof v === "string") ? String(v).replace(/\s*QBX\s*$/gi, "").trim() : String(v)
+        var n = parseFloat(s)
+        return String(isNaN(n) ? 0 : n)
     }
 
-    function refreshAddresses() {
-        if (!settingsManager || settingsManager.qbitxCliPath === "") {
+    // Wallet Balances section only: returns "<number> QBX".
+    function formatQbxAmount(v) {
+        if (v === undefined || v === null || v === "") return "0 QBX"
+        var s = (typeof v === "string") ? String(v).replace(/\s*QBX\s*$/i, "").trim() : String(v)
+        var n = parseFloat(s)
+        return (isNaN(n) ? 0 : n) + " QBX"
+    }
+
+    function refresh() {
+        if (selectedWallet !== "")
+            loadAddresses(selectedWallet)
+    }
+
+    function loadAddresses(wallet) {
+        if (!settingsManager || settingsManager.qbitxCliPath === "")
+            return
+        var w = (wallet && typeof wallet === "string") ? wallet.trim() : ""
+        if (w === "") {
+            if (errorLabel)
+                errorLabel.text = "Select a wallet"
+            addressList = []
             return
         }
-        if (!settingsManager.activeWallet || settingsManager.activeWallet === "") {
-            if (errorLabel) {
-                errorLabel.text = "No active wallet selected"
-            }
+        if (walletBusy)
             return
-        }
-        if (walletBusy) {
-            return  // Don't poll during wallet operations
-        }
         isLoading = true
-        errorLabel.text = ""
-        pendingRequests = 2
-        fullAddressList = []
-        addressBalancesList = []
-        hasFullList = false
-        hasBalances = false
-        
-        // Call A: Get full address list (all addresses, even empty)
-        cliBridge.callNamed("listreceivedbyaddress", {
-            "minconf": 0,
-            "include_empty": true,
-            "include_watchonly": false
-        }, settingsManager.activeWallet)
-        
-        // Call B: Get address balances (funded addresses only)
-        // Use -named to ensure proper type conversion
-        cliBridge.callNamed("getaddressbalances", {
+        if (errorLabel)
+            errorLabel.text = ""
+        addressList = []
+        walletSummary = { confirmed: "0 QBX", unconfirmed: "0 QBX", immature: "0 QBX", total: "0 QBX" }
+
+        // Single fast RPC: getaddressbalances (no per-address getaddressinfo/gettxout/listunspent)
+        cliBridge.callNamedWithTag("getaddressbalances", {
             "minconf": 0,
             "include_unsafe": true
-        }, settingsManager.activeWallet)
+        }, w, w)
     }
 
-    function mergeAddressData() {
-        // Create a map of balances by address
-        var balancesMap = {}
-        if (Array.isArray(addressBalancesList)) {
-            for (var i = 0; i < addressBalancesList.length; i++) {
-                var bal = addressBalancesList[i]
+    function applyAddressBalances(byAddress) {
+        var list = []
+        var sumConfirmed = 0, sumUnconfirmed = 0, sumImmature = 0
+        if (Array.isArray(byAddress)) {
+            for (var i = 0; i < byAddress.length; i++) {
+                var bal = byAddress[i]
                 if (bal && bal.address) {
-                    balancesMap[bal.address] = bal
-                }
-            }
-        }
-        
-        // Merge: start with full list, add balance data
-        var merged = []
-        if (Array.isArray(fullAddressList) && fullAddressList.length > 0) {
-            // We have full address list - merge with balances
-            for (var j = 0; j < fullAddressList.length; j++) {
-                var addr = fullAddressList[j]
-                var address = (addr && addr.address) ? addr.address : ""
-                if (address) {
-                    var balanceData = balancesMap[address] || {}
-                    merged.push({
-                        address: address,
-                        confirmed: (balanceData.confirmed !== undefined) ? balanceData.confirmed : 0,
-                        unconfirmed: (balanceData.unconfirmed !== undefined) ? balanceData.unconfirmed : 0,
-                        immature: (balanceData.immature !== undefined) ? balanceData.immature : 0,
-                        utxos: (balanceData.utxos !== undefined) ? balanceData.utxos : (balanceData.utxo_count !== undefined ? balanceData.utxo_count : 0)
-                    })
-                }
-            }
-        }
-        
-        // Also include any addresses from balances that weren't in the full list
-        // (or if we don't have full list, use balances as the source)
-        if (!hasFullList || merged.length === 0) {
-            // Fallback: use balances as address list
-            for (var addrKey in balancesMap) {
-                var bal = balancesMap[addrKey]
-                if (bal) {
-                    merged.push({
-                        address: addrKey,
-                        confirmed: (bal.confirmed !== undefined) ? bal.confirmed : 0,
-                        unconfirmed: (bal.unconfirmed !== undefined) ? bal.unconfirmed : 0,
-                        immature: (bal.immature !== undefined) ? bal.immature : 0,
+                    var c = (bal.confirmed !== undefined) ? Number(bal.confirmed) : 0
+                    var u = (bal.unconfirmed !== undefined) ? Number(bal.unconfirmed) : 0
+                    var im = (bal.immature !== undefined) ? Number(bal.immature) : 0
+                    sumConfirmed += c
+                    sumUnconfirmed += u
+                    sumImmature += im
+                    list.push({
+                        address: bal.address,
+                        confirmed: c,
+                        unconfirmed: u,
+                        immature: im,
                         utxos: (bal.utxos !== undefined) ? bal.utxos : (bal.utxo_count !== undefined ? bal.utxo_count : 0)
                     })
                 }
             }
-        } else {
-            // Add any addresses from balances that weren't in full list
-            for (var addrKey2 in balancesMap) {
-                var found = false
-                for (var k = 0; k < merged.length; k++) {
-                    if (merged[k].address === addrKey2) {
-                        found = true
-                        break
-                    }
-                }
-                if (!found) {
-                    var bal2 = balancesMap[addrKey2]
-                    if (bal2) {
-                        merged.push({
-                            address: addrKey2,
-                            confirmed: (bal2.confirmed !== undefined) ? bal2.confirmed : 0,
-                            unconfirmed: (bal2.unconfirmed !== undefined) ? bal2.unconfirmed : 0,
-                            immature: (bal2.immature !== undefined) ? bal2.immature : 0,
-                            utxos: (bal2.utxos !== undefined) ? bal2.utxos : (bal2.utxo_count !== undefined ? bal2.utxo_count : 0)
-                        })
-                    }
-                }
-            }
         }
-        
-        addressList = merged
-    }
-
-    function generatePQAddress() {
-        if (!settingsManager || settingsManager.qbitxCliPath === "") {
-            return
+        addressList = list
+        walletSummary = {
+            confirmed: sumConfirmed + " QBX",
+            unconfirmed: sumUnconfirmed + " QBX",
+            immature: sumImmature + " QBX",
+            total: (sumConfirmed + sumUnconfirmed + sumImmature) + " QBX"
         }
-        if (!settingsManager.activeWallet || settingsManager.activeWallet === "") {
-            if (errorLabel) {
-                errorLabel.text = "No active wallet selected"
-            }
-            return
-        }
-        isLoading = true
-        errorLabel.text = ""
-        cliBridge.call("getnewaddress", ["", "pq"], settingsManager.activeWallet)
     }
 
     Connections {
         target: cliBridge
-        function onSuccess(result) {
-            // MONOTONIC RULE: ALL RPC responses treated as "loaded but empty wallet"
-            // NEVER invalidate activeWallet based on address data
-            if (Array.isArray(result)) {
-                if (result.length > 0 && result[0].address && (result[0].amount !== undefined || result[0].confirmations !== undefined)) {
-                    // Valid listreceivedbyaddress response
-                    fullAddressList = result
-                    hasFullList = true
-                    pendingRequests--
-                } else {
-                    // Empty but valid array = empty wallet (NOT unloaded wallet)
-                    fullAddressList = result
-                    hasFullList = true
-                    pendingRequests--
-                }
+        function onSuccessWithTag(result, tag) {
+            // Only apply if this response is for the currently selected wallet (avoid stale data on wallet switch)
+            if (tag !== selectedWallet)
+                return
+            if (result && typeof result === "object" && result.by_address !== undefined) {
+                applyAddressBalances(result.by_address)
                 if (errorLabel) errorLabel.text = ""
-                checkAndMerge()
-            } else if (result && typeof result === "object" && result.by_address !== undefined) {
-                // Valid getaddressbalances response (empty arrays are valid)
-                addressBalancesList = (Array.isArray(result.by_address)) ? result.by_address : []
-                hasBalances = true
-                pendingRequests--
-                if (errorLabel) errorLabel.text = ""
-                checkAndMerge()
-            } else if (typeof result === "string" || (result && result.address)) {
-                // New address generation
-                lastGeneratedAddress = (typeof result === "string") ? result : result.address
-                isLoading = false
-                refreshAddresses()
             } else {
-                // CRITICAL: Unknown/unexpected format = "loaded but empty", NOT "wallet invalid"
-                // Defensive: treat as empty arrays
-                if (!hasFullList) {
-                    fullAddressList = []
-                    hasFullList = true
-                }
-                if (!hasBalances) {
-                    addressBalancesList = []
-                    hasBalances = true
-                }
-                pendingRequests--
-                if (pendingRequests <= 0) {
-                    isLoading = false
-                }
-                console.log("Addresses: Unexpected format treated as empty wallet:", typeof result)
-                // Still complete the merge - don't break the flow
-                checkAndMerge()
+                applyAddressBalances([])
+                if (errorLabel) errorLabel.text = ""
+            }
+            isLoading = false
+        }
+        function onErrorOccurredWithTag(errorMessage, tag) {
+            if (tag !== selectedWallet)
+                return
+            isLoading = false
+            addressList = []
+            if (errorLabel)
+                errorLabel.text = errorMessage
+        }
+        function onSuccess(result) {
+            // getnewaddress (Generate PQ Address dialog) still uses untagged call
+            if (typeof result === "string" || (result && result.address)) {
+                var addr = (typeof result === "string") ? result : result.address
+                lastGeneratedAddress = addr
+                lastStatusMessage = "Generated address for wallet " + generateDialogChosenWallet + ": " + addr
+                if (errorLabel) errorLabel.text = ""
+                isLoading = false
+                if (generateDialogChosenWallet === selectedWallet)
+                    loadAddresses(selectedWallet)
             }
         }
         function onErrorOccurred(errorMessage) {
-            // MONOTONIC RULE: RPC errors NEVER affect wallet state
-            // Address RPC failures = "loaded wallet with address errors", NOT "unloaded wallet"
-            pendingRequests--
-            if (errorMessage.indexOf("listreceivedbyaddress") >= 0 || errorMessage.indexOf("Unknown method") >= 0 || errorMessage.indexOf("Method not found") >= 0) {
-                hasFullList = false
-                if (pendingRequests <= 0) {
-                    checkAndMerge()  // Merge what we have - show partial data
-                }
-            } else if (errorMessage.indexOf("getaddressbalances") >= 0) {
-                hasBalances = false
-                if (pendingRequests <= 0) {
-                    checkAndMerge()  // Show what we can, keep wallet active
-                }
-            } else {
-                // Unknown RPC error - treat as temporary issue, keep wallet active
-                if (pendingRequests <= 0) {
-                    checkAndMerge()
-                }
-            }
-            if (pendingRequests <= 0) {
-                isLoading = false
-            }
-            // Show error but NEVER clear activeWallet
-            if (errorLabel) {
+            // getnewaddress or other untagged call failed
+            isLoading = false
+            if (errorLabel)
                 errorLabel.text = errorMessage
-            }
         }
     }
 
     Connections {
-        target: settingsManager
-        function onActiveWalletChanged() {
-            // Refresh addresses when active wallet changes
-            if (settingsManager && settingsManager.activeWallet && settingsManager.activeWallet !== "") {
-                Qt.callLater(refreshAddresses) // Use callLater to ensure proper timing
-            } else {
-                // Clear address list when no active wallet
-                addressList = []
-                if (errorLabel) {
-                    errorLabel.text = ""
-                }
+        target: walletManager
+        function onLoadedWalletsChanged() {
+            if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && walletCombo.currentIndex < 0) {
+                walletCombo.currentIndex = 0
             }
         }
     }
 
     Component.onCompleted: {
-        if (hasWallet) {
-            refreshAddresses()
-        }
+        if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && walletCombo.currentIndex < 0)
+            walletCombo.currentIndex = 0
+        if (selectedWallet !== "")
+            loadAddresses(selectedWallet)
     }
 
     ColumnLayout {
@@ -266,34 +157,47 @@ Page {
         anchors.margins: 20
         spacing: 20
 
-        // No active wallet banner
-        Rectangle {
+        RowLayout {
             Layout.fillWidth: true
-            height: 60
-            color: "#fff3cd"
-            border.color: "#ffc107"
-            border.width: 1
-            visible: !hasWallet
-            radius: 4
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 15
-
-                Text {
-                    Layout.fillWidth: true
-                    text: "No active wallet selected. Please load a wallet from the Wallets page."
-                    color: "#856404"
-                    font.pixelSize: 14
-                    wrapMode: Text.Wrap
+            spacing: 10
+            Label { text: "Wallet:"; font.pixelSize: 14 }
+            ComboBox {
+                id: walletCombo
+                                Layout.preferredWidth: 280
+                Layout.preferredHeight: 36
+                model: walletManager ? walletManager.wallets : []
+                currentIndex: -1
+                onActivated: {
+                    var w = walletManager && walletManager.wallets && walletManager.wallets[index] ? walletManager.wallets[index] : ""
+                    selectedWallet = w
+                    if (w !== "")
+                        loadAddresses(w)
+                }
+                onCurrentIndexChanged: {
+                    if (currentIndex >= 0 && walletManager && walletManager.wallets && currentIndex < walletManager.wallets.length) {
+                        var w = walletManager.wallets[currentIndex]
+                        if (w !== selectedWallet) {
+                            selectedWallet = w
+                            if (w !== "")
+                                loadAddresses(w)
+                        }
+                    }
+                }
+                Component.onCompleted: {
+                    if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && currentIndex < 0)
+                        currentIndex = 0
                 }
             }
+            Item { Layout.fillWidth: true }
         }
 
         Text {
             text: "Addresses"
-            font.pixelSize: 24
+            font.pixelSize: 22
             font.bold: true
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignHCenter
+            horizontalAlignment: Text.AlignHCenter
         }
 
         Rectangle {
@@ -317,27 +221,152 @@ Page {
             }
         }
 
+        StatusPanel {
+            message: walletManager && walletManager.lastError !== "" ? walletManager.lastError : ""
+            panelType: "error"
+        }
+
+        // Top action bar: buttons centered as a group
         RowLayout {
             Layout.fillWidth: true
-            spacing: 10
+            Layout.maximumWidth: 720
+            Layout.alignment: Qt.AlignHCenter
+            Layout.preferredHeight: 52
+            spacing: 14
 
+            Item { Layout.fillWidth: true }
             Button {
                 text: "Generate PQ Address"
-                enabled: {
-                    if (!settingsManager || !walletManager) return false
-                    return !isLoading && hasWallet && settingsManager.qbitxCliPath !== "" && !walletBusy
+                Layout.minimumWidth: 180
+                Layout.preferredHeight: 52
+                font.pixelSize: 17
+                font.weight: Font.DemiBold
+                enabled: !isLoading && settingsManager && settingsManager.qbitxCliPath !== "" && !walletBusy && walletManager && walletManager.wallets && walletManager.wallets.length > 0
+                onClicked: generateWalletDialog.open()
+                background: Rectangle {
+                    radius: 10
+                    border.width: 1
+                    border.color: parent.pressed ? "#a0a0a0" : (parent.hovered ? "#999" : "#888")
+                    color: parent.pressed ? "#d0d0d0" : (parent.hovered ? "#d5d5d5" : "#c5c5c5")
                 }
-                onClicked: generatePQAddress()
+                contentItem: Text {
+                    text: parent.text
+                    color: "#2d2d2d"
+                    font: parent.font
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
 
             Button {
                 text: "Refresh"
-                enabled: {
-                    if (!settingsManager || !walletManager) return false
-                    return !isLoading && hasWallet && settingsManager.qbitxCliPath !== "" && !walletBusy
+                Layout.minimumWidth: 180
+                Layout.preferredHeight: 52
+                font.pixelSize: 17
+                font.weight: Font.DemiBold
+                enabled: !isLoading && selectedWallet !== "" && settingsManager && settingsManager.qbitxCliPath !== "" && !walletBusy
+                onClicked: loadAddresses(selectedWallet)
+                background: Rectangle {
+                    radius: 10
+                    border.width: 1
+                    border.color: parent.pressed ? "#a0a0a0" : (parent.hovered ? "#999" : "#888")
+                    color: parent.pressed ? "#d0d0d0" : (parent.hovered ? "#d5d5d5" : "#c5c5c5")
                 }
-                onClicked: refreshAddresses()
+                contentItem: Text {
+                    text: parent.text
+                    color: "#2d2d2d"
+                    font: parent.font
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
+
+            Item { Layout.fillWidth: true }
+        }
+
+        Dialog {
+            id: generateWalletDialog
+            title: "Generate PQ Address"
+            modal: true
+            standardButtons: Dialog.NoButton
+            width: 320
+            onOpened: {
+                var list = walletManager ? walletManager.wallets : []
+                for (var i = 0; i < list.length; i++) {
+                    if (list[i] === selectedWallet) {
+                        generateWalletList.currentIndex = i
+                        return
+                    }
+                }
+                if (list.length > 0)
+                    generateWalletList.currentIndex = 0
+                else
+                    generateWalletList.currentIndex = -1
+            }
+            onAccepted: {
+                var w = walletManager && walletManager.wallets && generateWalletList.currentIndex >= 0 && generateWalletList.currentIndex < walletManager.wallets.length
+                    ? walletManager.wallets[generateWalletList.currentIndex] : ""
+                if (w !== "") {
+                    generateDialogChosenWallet = w
+                    isLoading = true
+                    if (errorLabel) errorLabel.text = ""
+                    lastStatusMessage = ""
+                    cliBridge.call("getnewaddress", ["", "pq"], w)
+                }
+            }
+
+            contentItem: ColumnLayout {
+                Label { text: "Select wallet to generate address for:"; font.pixelSize: 14 }
+                ListView {
+                    id: generateWalletList
+                    Layout.preferredWidth: 280
+                    Layout.preferredHeight: Math.min(200, Math.max(120, (walletManager ? walletManager.wallets : []).length * 44))
+                    clip: true
+                    model: walletManager ? walletManager.wallets : []
+                    currentIndex: -1
+                    highlight: Rectangle {
+                        color: "#cce5ff"
+                        radius: 4
+                        border.color: "#99c9ff"
+                        border.width: 1
+                    }
+                    highlightFollowsCurrentItem: true
+                    delegate: ItemDelegate {
+                        width: generateWalletList.width - 4
+                        height: 40
+                        text: modelData
+                        font.pixelSize: 14
+                        highlighted: generateWalletList.currentIndex === index
+                        onClicked: generateWalletList.currentIndex = index
+                        background: Rectangle {
+                            color: parent.highlighted ? "#cce5ff" : (parent.hovered ? "#e8e8e8" : "transparent")
+                            radius: 2
+                        }
+                    }
+                }
+            }
+
+            footer: RowLayout {
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "Cancel"
+                    onClicked: generateWalletDialog.reject()
+                }
+                Button {
+                    text: "OK"
+                    enabled: generateWalletList.currentIndex >= 0 && walletManager && walletManager.wallets && generateWalletList.currentIndex < walletManager.wallets.length
+                    onClicked: generateWalletDialog.accept()
+                }
+            }
+        }
+
+        Text {
+            visible: lastStatusMessage !== ""
+            text: lastStatusMessage
+            color: "#0c5460"
+            font.pixelSize: 14
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
         }
 
         Text {
@@ -346,9 +375,20 @@ Page {
             visible: text !== undefined && text !== null && text !== ""
         }
 
-        BusyIndicator {
+        RowLayout {
             Layout.alignment: Qt.AlignCenter
-            running: isLoading
+            spacing: 8
+            visible: isLoading
+            BusyIndicator {
+                running: isLoading
+                Layout.preferredWidth: 32
+                Layout.preferredHeight: 32
+            }
+            Label {
+                text: "Loading..."
+                font.pixelSize: 14
+                color: "#555"
+            }
         }
 
         GroupBox {
@@ -374,51 +414,70 @@ Page {
                         RowLayout {
                             anchors.fill: parent
                             anchors.margins: 5
-                            spacing: 5
+                            spacing: 2
 
                             Text {
-                                Layout.preferredWidth: 300
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 180
                                 text: "Address"
                                 font.bold: true
                                 font.pixelSize: 12
+                                horizontalAlignment: Text.AlignLeft
                             }
 
                             Text {
-                                Layout.preferredWidth: 100
+                                Layout.preferredWidth: 110
+                                Layout.maximumWidth: 110
                                 text: "Confirmed"
                                 font.bold: true
                                 font.pixelSize: 12
+                                horizontalAlignment: Text.AlignHCenter
                             }
 
                             Text {
-                                Layout.preferredWidth: 100
+                                Layout.preferredWidth: 110
+                                Layout.maximumWidth: 110
                                 text: "Unconfirmed"
                                 font.bold: true
                                 font.pixelSize: 12
+                                horizontalAlignment: Text.AlignHCenter
                             }
 
                             Text {
-                                Layout.preferredWidth: 100
+                                Layout.preferredWidth: 110
+                                Layout.maximumWidth: 110
                                 text: "Immature"
                                 font.bold: true
                                 font.pixelSize: 12
+                                horizontalAlignment: Text.AlignHCenter
                             }
 
                             Text {
-                                Layout.preferredWidth: 100
+                                Layout.preferredWidth: 70
+                                Layout.maximumWidth: 70
                                 text: "UTXOs"
                                 font.bold: true
                                 font.pixelSize: 12
+                                horizontalAlignment: Text.AlignHCenter
                             }
 
                             Text {
-                                Layout.preferredWidth: 100
+                                Layout.preferredWidth: 120
+                                Layout.maximumWidth: 120
                                 text: "Total"
                                 font.bold: true
                                 font.pixelSize: 12
+                                horizontalAlignment: Text.AlignHCenter
                             }
 
-                            Item { Layout.fillWidth: true }
+                            Text {
+                                Layout.preferredWidth: 70
+                                Layout.maximumWidth: 70
+                                text: "Copy"
+                                font.bold: true
+                                font.pixelSize: 12
+                                horizontalAlignment: Text.AlignHCenter
+                            }
                         }
                     }
 
@@ -437,68 +496,160 @@ Page {
                         RowLayout {
                             anchors.fill: parent
                             anchors.margins: 5
-                            spacing: 5
+                            spacing: 2
 
                             Text {
-                                Layout.preferredWidth: 300
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 180
                                 text: (modelData && modelData.address) ? modelData.address : "N/A"
                                 font.pixelSize: 12
-                                elide: Text.ElideMiddle
+                                elide: Text.ElideRight
+                                wrapMode: Text.NoWrap
+                                horizontalAlignment: Text.AlignLeft
                             }
 
                             Text {
-                                Layout.preferredWidth: 100
-                                text: (modelData && modelData.confirmed !== undefined) ? modelData.confirmed + " QBX" : "0 QBX"
+                                Layout.preferredWidth: 110
+                                Layout.maximumWidth: 110
+                                text: formatAmountNumber(modelData && modelData.confirmed)
                                 font.pixelSize: 12
+                                horizontalAlignment: Text.AlignRight
                             }
 
                             Text {
-                                Layout.preferredWidth: 100
-                                text: (modelData && modelData.unconfirmed !== undefined) ? modelData.unconfirmed + " QBX" : "0 QBX"
+                                Layout.preferredWidth: 110
+                                Layout.maximumWidth: 110
+                                text: formatAmountNumber(modelData && modelData.unconfirmed)
                                 font.pixelSize: 12
+                                horizontalAlignment: Text.AlignRight
                             }
 
                             Text {
-                                Layout.preferredWidth: 100
-                                text: (modelData && modelData.immature !== undefined) ? modelData.immature + " QBX" : "0 QBX"
+                                Layout.preferredWidth: 110
+                                Layout.maximumWidth: 110
+                                text: formatAmountNumber(modelData && modelData.immature)
                                 font.pixelSize: 12
+                                horizontalAlignment: Text.AlignRight
                             }
 
                             Text {
-                                Layout.preferredWidth: 80
-                                text: (modelData && (modelData.utxos !== undefined || modelData.utxo_count !== undefined)) 
-                                      ? (modelData.utxos || modelData.utxo_count || 0) 
+                                Layout.preferredWidth: 70
+                                Layout.maximumWidth: 70
+                                text: (modelData && (modelData.utxos !== undefined || modelData.utxo_count !== undefined))
+                                      ? (modelData.utxos || modelData.utxo_count || 0)
                                       : 0
                                 font.pixelSize: 12
+                                horizontalAlignment: Text.AlignRight
                             }
 
                             Text {
-                                Layout.preferredWidth: 100
-                                text: {
-                                    if (!modelData) return "0 QBX"
-                                    var confirmed = (modelData.confirmed !== undefined) ? modelData.confirmed : 0
-                                    var unconfirmed = (modelData.unconfirmed !== undefined) ? modelData.unconfirmed : 0
-                                    var immature = (modelData.immature !== undefined) ? modelData.immature : 0
-                                    return (confirmed + unconfirmed + immature) + " QBX"
-                                }
+                                Layout.preferredWidth: 120
+                                Layout.maximumWidth: 120
+                                text: formatAmountNumber(modelData ? ((modelData.confirmed || 0) + (modelData.unconfirmed || 0) + (modelData.immature || 0)) : 0)
                                 font.pixelSize: 12
                                 font.bold: true
+                                horizontalAlignment: Text.AlignRight
                             }
 
-                            Button {
-                                text: "Copy"
-                                Layout.preferredWidth: 60
-                                enabled: !!(modelData && modelData.address)
-                                onClicked: {
-                                    if (modelData && modelData.address) {
-                                        copyHelper.text = modelData.address
-                                        copyHelper.selectAll()
-                                        copyHelper.copy()
+                            Item {
+                                Layout.preferredWidth: 70
+                                Layout.maximumWidth: 70
+                                Layout.alignment: Qt.AlignCenter
+
+                                Button {
+                                    anchors.centerIn: parent
+                                    width: 54
+                                    height: 24
+                                    text: "Copy"
+                                    font.pixelSize: 11
+                                    enabled: !!(modelData && modelData.address)
+                                    onClicked: {
+                                        if (modelData && modelData.address) {
+                                            copyHelper.text = modelData.address
+                                            copyHelper.selectAll()
+                                            copyHelper.copy()
+                                        }
+                                    }
+                                    background: Rectangle {
+                                        radius: 4
+                                        border.width: 1
+                                        border.color: parent.pressed ? "#a0a0a0" : (parent.hovered ? "#999" : "#888")
+                                        color: parent.pressed ? "#d0d0d0" : (parent.hovered ? "#d5d5d5" : "#c5c5c5")
+                                    }
+                                    contentItem: Text {
+                                        text: parent.text
+                                        color: "#2d2d2d"
+                                        font: parent.font
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
                                     }
                                 }
                             }
                         }
                     }
+                }
+            }
+        }
+
+        GroupBox {
+            Layout.fillWidth: true
+            Layout.maximumWidth: 720
+            Layout.alignment: Qt.AlignHCenter
+            Layout.topMargin: 24
+            title: "Wallet Balances"
+
+            GridLayout {
+                columns: 2
+                columnSpacing: 20
+                rowSpacing: 10
+                Layout.fillWidth: true
+
+                Text {
+                    text: "Confirmed (Mine):"
+                    font.pixelSize: 16
+                }
+                Text {
+                    text: formatQbxAmount(walletSummary.confirmed)
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignRight
+                    Layout.fillWidth: true
+                }
+
+                Text {
+                    text: "Unconfirmed (Mine):"
+                    font.pixelSize: 16
+                }
+                Text {
+                    text: formatQbxAmount(walletSummary.unconfirmed)
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignRight
+                    Layout.fillWidth: true
+                }
+
+                Text {
+                    text: "Immature (Mine):"
+                    font.pixelSize: 16
+                }
+                Text {
+                    text: formatQbxAmount(walletSummary.immature)
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignRight
+                    Layout.fillWidth: true
+                }
+
+                Text {
+                    text: "Total (Mine):"
+                    font.pixelSize: 16
+                }
+                Text {
+                    text: formatQbxAmount(walletSummary.total)
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignRight
+                    Layout.fillWidth: true
                 }
             }
         }

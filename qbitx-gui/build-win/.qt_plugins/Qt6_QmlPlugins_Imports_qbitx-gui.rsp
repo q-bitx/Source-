@@ -1,0 +1,13 @@
+-rootPath
+/home/sus/qbitx_restore/qbitx-gui
+-cmake-output
+-output-file
+/home/sus/qbitx_restore/qbitx-gui/build-win/.qt_plugins/Qt6_QmlPlugins_Imports_qbitx-gui.cmake
+-importPath
+/home/sus/qbitx_restore/qbitx-gui/build-win/QBitX
+-importPath
+/home/sus/qbitx_restore/qbitx-gui/build-win
+-importPath
+/home/sus/Qt/6.6.3/mingw_64/./qml
+-qrcFiles
+/home/sus/qbitx_restore/qbitx-gui/build-win/.rcc/qmake_QBitX.qrc

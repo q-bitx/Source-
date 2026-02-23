@@ -1,0 +1,3 @@
+module components
+SidebarButton 1.0 SidebarButton.qml
+StatusPanel 1.0 StatusPanel.qml

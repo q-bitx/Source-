@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/">
+    <file alias="/QBitX">/home/sus/qbitx_restore/qbitx-gui/build-win/QBitX</file>
+
+  </qresource>
+</RCC>

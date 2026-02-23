@@ -7,18 +7,19 @@ Page {
 
     property string newAddress: ""
     property bool isLoading: false
+    property bool hasWallet: walletManager && walletManager.wallets ? walletManager.wallets.length > 0 : false
+    property string selectedWallet: ""
 
     function generateAddress() {
-        if (settingsManager.qbitxCliPath === "") {
+        if (!settingsManager || settingsManager.qbitxCliPath === "")
             return
-        }
-        if (settingsManager.activeWallet === "") {
-            errorLabel.text = "No active wallet selected"
+        if (selectedWallet === "") {
+            errorLabel.text = "Select a wallet"
             return
         }
         isLoading = true
         errorLabel.text = ""
-        cliBridge.call("getnewaddress", ["", "pq"], settingsManager.activeWallet)
+        cliBridge.call("getnewaddress", ["", "pq"], selectedWallet)
     }
 
     Connections {
@@ -39,6 +40,19 @@ Page {
             isLoading = false
             errorLabel.text = errorMessage
         }
+    }
+
+    Connections {
+        target: walletManager
+        function onLoadedWalletsChanged() {
+            if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && receiveWalletCombo.currentIndex < 0)
+                receiveWalletCombo.currentIndex = 0
+        }
+    }
+
+    Component.onCompleted: {
+        if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && receiveWalletCombo.currentIndex < 0)
+            receiveWalletCombo.currentIndex = 0
     }
 
     ColumnLayout {
@@ -73,6 +87,34 @@ Page {
             }
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            Label { text: "Wallet:"; font.pixelSize: 14 }
+            ComboBox {
+                id: receiveWalletCombo
+                Layout.preferredWidth: 260
+                Layout.preferredHeight: 36
+                model: walletManager ? walletManager.wallets : []
+                onActivated: {
+                    if (walletManager && walletManager.wallets && index >= 0 && index < walletManager.wallets.length)
+                        selectedWallet = walletManager.wallets[index]
+                }
+                onCurrentIndexChanged: {
+                    if (currentIndex >= 0 && walletManager && walletManager.wallets && currentIndex < walletManager.wallets.length) {
+                        var w = walletManager.wallets[currentIndex]
+                        if (w !== selectedWallet)
+                            selectedWallet = w
+                    }
+                }
+                Component.onCompleted: {
+                    if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && currentIndex < 0)
+                        currentIndex = 0
+                }
+            }
+            Item { Layout.fillWidth: true }
+        }
+
         Text {
             id: errorLabel
             color: "red"
@@ -87,13 +129,9 @@ Page {
                 anchors.fill: parent
                 spacing: 10
 
-                Text {
-                    text: "Active Wallet: " + (settingsManager.activeWallet || "None")
-                }
-
                 Button {
                     text: "Generate Address"
-                    enabled: !isLoading && settingsManager.activeWallet !== "" && settingsManager.qbitxCliPath !== ""
+                    enabled: !isLoading && selectedWallet !== "" && settingsManager && settingsManager.qbitxCliPath !== ""
                     onClicked: generateAddress()
                 }
 

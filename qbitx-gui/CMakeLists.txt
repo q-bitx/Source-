@@ -8,6 +8,18 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+# Optional: enable AddressSanitizer for local debug (e.g. cmake -DQBITX_ASAN=ON ..)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND QBITX_ASAN)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
+endif()
+
+# MinGW cross-build: avoid host Vulkan/WrapVulkanHeaders (/usr/include) leaking into compile commands
+option(QBITX_GUI_DISABLE_VULKAN "Disable Vulkan (recommended for MinGW cross-build to avoid host headers)" OFF)
+if(QBITX_GUI_DISABLE_VULKAN OR CMAKE_CROSSCOMPILING)
+    set(CMAKE_DISABLE_FIND_PACKAGE_Vulkan ON CACHE BOOL "Disable Vulkan for this build" FORCE)
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Widgets)
 qt_add_executable(qbitx-gui
     main.cpp
@@ -19,31 +31,17 @@ qt_add_executable(qbitx-gui
     walletmanager.cpp
     pathutil.h
     pathutil.cpp
-    qml/main.qml
-    qml/pages/Dashboard.qml
-    qml/pages/Wallets.qml
-    qml/pages/Addresses.qml
-    qml/pages/Balance.qml
-    qml/pages/Send.qml
-    qml/pages/History.qml
-    qml/pages/Settings.qml
+    clirunner.h
+    clirunner.cpp
+    logmanager.h
+    logmanager.cpp
+    qml.qrc
 )
 
 qt_add_qml_module(qbitx-gui
     URI QBitX
     VERSION 1.0
-    QML_FILES
-        qml/main.qml
-        qml/pages/Dashboard.qml
-        qml/pages/Wallets.qml
-        qml/pages/Addresses.qml
-        qml/pages/Balance.qml
-        qml/pages/Send.qml
-        qml/pages/History.qml
-        qml/pages/Settings.qml
 )
-
-set_source_files_properties(qml/main.qml PROPERTIES QT_RESOURCE_ALIAS main.qml)
 
 target_link_libraries(qbitx-gui
     PRIVATE

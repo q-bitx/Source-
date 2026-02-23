@@ -1,0 +1,134 @@
+{
+    "classes": [
+        {
+            "className": "CliRunner",
+            "methods": [
+                {
+                    "access": "public",
+                    "name": "detectCliPath",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "cliPath",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "datadir",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "testConnection",
+                    "returnType": "void"
+                }
+            ],
+            "object": true,
+            "properties": [
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 0,
+                    "name": "lastStdout",
+                    "notify": "lastStdoutChanged",
+                    "read": "lastStdout",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 1,
+                    "name": "lastStderr",
+                    "notify": "lastStderrChanged",
+                    "read": "lastStderr",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 2,
+                    "name": "lastExitCode",
+                    "notify": "lastExitCodeChanged",
+                    "read": "lastExitCode",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "int",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 3,
+                    "name": "networkInfoJson",
+                    "notify": "networkInfoJsonChanged",
+                    "read": "networkInfoJson",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false
+                }
+            ],
+            "qualifiedClassName": "CliRunner",
+            "signals": [
+                {
+                    "access": "public",
+                    "name": "lastStdoutChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "lastStderrChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "lastExitCodeChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "networkInfoJsonChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "success",
+                            "type": "bool"
+                        },
+                        {
+                            "name": "message",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "testFinished",
+                    "returnType": "void"
+                }
+            ],
+            "superClasses": [
+                {
+                    "access": "public",
+                    "name": "QObject"
+                }
+            ]
+        }
+    ],
+    "inputFile": "clirunner.h",
+    "outputRevision": 68
+}

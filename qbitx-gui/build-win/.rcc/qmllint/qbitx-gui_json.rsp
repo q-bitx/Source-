@@ -1,0 +1,9 @@
+--bare
+-I
+/home/sus/qbitx_restore/qbitx-gui/build-win
+-I
+/home/sus/Qt/6.6.3/mingw_64/./qml
+--resource
+/home/sus/qbitx_restore/qbitx-gui/build-win/.rcc/qmake_QBitX.qrc
+--json
+/home/sus/qbitx_restore/qbitx-gui/build-win/qbitx-gui_qmllint.json

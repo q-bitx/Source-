@@ -1,0 +1,215 @@
+{
+    "classes": [
+        {
+            "className": "SettingsManager",
+            "methods": [
+                {
+                    "access": "public",
+                    "name": "effectiveQbitxCliPath",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "error",
+                            "type": "QString*"
+                        }
+                    ],
+                    "name": "checkCliAvailable",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "isCloned": true,
+                    "name": "checkCliAvailable",
+                    "returnType": "bool"
+                },
+                {
+                    "access": "public",
+                    "name": "autoDetectCliPath",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "origin",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "setWalletOrigin",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "getWalletOrigin",
+                    "returnType": "QString"
+                }
+            ],
+            "object": true,
+            "properties": [
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 0,
+                    "name": "qbitxCliPath",
+                    "notify": "qbitxCliPathChanged",
+                    "read": "qbitxCliPath",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false,
+                    "write": "setQbitxCliPath"
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 1,
+                    "name": "datadir",
+                    "notify": "datadirChanged",
+                    "read": "datadir",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false,
+                    "write": "setDatadir"
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 2,
+                    "name": "rpcuser",
+                    "notify": "rpcuserChanged",
+                    "read": "rpcuser",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false,
+                    "write": "setRpcuser"
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 3,
+                    "name": "rpcpassword",
+                    "notify": "rpcpasswordChanged",
+                    "read": "rpcpassword",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false,
+                    "write": "setRpcpassword"
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 4,
+                    "name": "network",
+                    "notify": "networkChanged",
+                    "read": "network",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false,
+                    "write": "setNetwork"
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 5,
+                    "name": "useAutoDetectCli",
+                    "notify": "useAutoDetectCliChanged",
+                    "read": "useAutoDetectCli",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "bool",
+                    "user": false,
+                    "write": "setUseAutoDetectCli"
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 6,
+                    "name": "lastCliCheckError",
+                    "notify": "lastCliCheckErrorChanged",
+                    "read": "lastCliCheckError",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false
+                }
+            ],
+            "qualifiedClassName": "SettingsManager",
+            "signals": [
+                {
+                    "access": "public",
+                    "name": "qbitxCliPathChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "datadirChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "rpcuserChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "rpcpasswordChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "networkChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "useAutoDetectCliChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "lastCliCheckErrorChanged",
+                    "returnType": "void"
+                }
+            ],
+            "superClasses": [
+                {
+                    "access": "public",
+                    "name": "QObject"
+                }
+            ]
+        }
+    ],
+    "inputFile": "settingsmanager.h",
+    "outputRevision": 68
+}
