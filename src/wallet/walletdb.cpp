@@ -25,7 +25,9 @@
 #ifdef USE_BDB
 #include <wallet/bdb.h>
 #endif
+#ifdef USE_BDB
 #include <wallet/migrate.h>
+#endif
 #include <wallet/sqlite.h>
 #include <wallet/wallet.h>
 
@@ -1864,7 +1866,13 @@ std::unique_ptr<WalletDatabase> MakeDatabase(const fs::path& path, const Databas
     }
 
     if (format == DatabaseFormat::BERKELEY_RO) {
+#ifdef USE_BDB
         return MakeBerkeleyRODatabase(path, options, status, error);
+#else
+        error = Untranslated(strprintf("Failed to open database path '%s'. Build does not support Berkeley DB migration.", PathToString(path)));
+        status = DatabaseStatus::FAILED_BAD_FORMAT;
+        return nullptr;
+#endif
     }
 
 #ifdef USE_BDB

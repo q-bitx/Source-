@@ -1,0 +1,489 @@
+{
+    "classes": [
+        {
+            "className": "WalletManager",
+            "methods": [
+                {
+                    "access": "public",
+                    "name": "refreshWallets",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "name",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "createWallet",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "name",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "loadWallet",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "backupWallet",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "name",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "folderPath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "restoreWallet",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "folderPath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "restoreWalletFromFolder",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "sourcePath",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "importWalletFromPath",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "sourcePath",
+                            "type": "QString"
+                        }
+                    ],
+                    "isCloned": true,
+                    "name": "importWalletFromPath",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "backupDir",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "backupWalletToPath",
+                    "returnType": "QVariantMap"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "path",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "mustExist",
+                            "type": "bool"
+                        },
+                        {
+                            "name": "mustBeWritable",
+                            "type": "bool"
+                        },
+                        {
+                            "name": "allowCreate",
+                            "type": "bool"
+                        }
+                    ],
+                    "name": "normalizeUserPath",
+                    "returnType": "QVariantMap"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "path",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "mustExist",
+                            "type": "bool"
+                        },
+                        {
+                            "name": "mustBeWritable",
+                            "type": "bool"
+                        }
+                    ],
+                    "isCloned": true,
+                    "name": "normalizeUserPath",
+                    "returnType": "QVariantMap"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "path",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "mustExist",
+                            "type": "bool"
+                        }
+                    ],
+                    "isCloned": true,
+                    "name": "normalizeUserPath",
+                    "returnType": "QVariantMap"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "path",
+                            "type": "QString"
+                        }
+                    ],
+                    "isCloned": true,
+                    "name": "normalizeUserPath",
+                    "returnType": "QVariantMap"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "folderPath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "deriveWalletNameFromFolder",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "deleteLocalCopy",
+                            "type": "bool"
+                        },
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "exitWallet",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "deleteWalletByName",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "getWalletPathForName",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "name": "getDefaultBackupDirectory",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "createWalletDatBackup",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "directoryPath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "importWalletDirectory",
+                    "returnType": "QVariantMap"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "cleanupFailedImport",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "autoBackupCurrentWallet",
+                    "returnType": "QVariantMap"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "getWalletDatPath",
+                    "returnType": "QString"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "destinationPath",
+                            "type": "QString"
+                        },
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "backupWalletToFile",
+                    "returnType": "QVariantMap"
+                }
+            ],
+            "object": true,
+            "properties": [
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 0,
+                    "name": "walletBusy",
+                    "notify": "walletBusyChanged",
+                    "read": "walletBusy",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "bool",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 1,
+                    "name": "loadedWallets",
+                    "notify": "loadedWalletsChanged",
+                    "read": "loadedWallets",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QStringList",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 2,
+                    "name": "wallets",
+                    "notify": "walletsChanged",
+                    "read": "wallets",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QStringList",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 3,
+                    "name": "lastError",
+                    "notify": "lastErrorChanged",
+                    "read": "lastError",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false
+                },
+                {
+                    "constant": false,
+                    "designable": true,
+                    "final": false,
+                    "index": 4,
+                    "name": "lastInfo",
+                    "notify": "lastInfoChanged",
+                    "read": "lastInfo",
+                    "required": false,
+                    "scriptable": true,
+                    "stored": true,
+                    "type": "QString",
+                    "user": false
+                }
+            ],
+            "qualifiedClassName": "WalletManager",
+            "signals": [
+                {
+                    "access": "public",
+                    "name": "walletBusyChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "loadedWalletsChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "walletsChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "lastErrorChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "lastInfoChanged",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "walletImported",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "backupPath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "walletBackedUp",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "name": "walletExited",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "message",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "errorOccurred",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "message",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "successMessage",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "walletName",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "walletDatImported",
+                    "returnType": "void"
+                },
+                {
+                    "access": "public",
+                    "arguments": [
+                        {
+                            "name": "backupPath",
+                            "type": "QString"
+                        }
+                    ],
+                    "name": "walletDatBackedUp",
+                    "returnType": "void"
+                }
+            ],
+            "superClasses": [
+                {
+                    "access": "public",
+                    "name": "QObject"
+                }
+            ]
+        }
+    ],
+    "inputFile": "walletmanager.h",
+    "outputRevision": 68
+}

@@ -8,26 +8,23 @@ Page {
     property var transactions: []
     property bool isLoading: false
     property bool walletBusy: walletManager ? walletManager.walletBusy : false
-    property bool hasWallet: settingsManager ? (settingsManager.activeWallet !== "") : false
+    property bool hasWallet: walletManager && walletManager.wallets ? walletManager.wallets.length > 0 : false
+    property string selectedWallet: ""
 
     function refreshHistory() {
-        if (!settingsManager || settingsManager.qbitxCliPath === "") {
+        if (!settingsManager || settingsManager.qbitxCliPath === "")
+            return
+        if (selectedWallet === "") {
+            if (errorLabel)
+                errorLabel.text = "Select a wallet"
             return
         }
-        if (!settingsManager.activeWallet || settingsManager.activeWallet === "") {
-            if (errorLabel) {
-                errorLabel.text = "No active wallet selected"
-            }
+        if (walletBusy)
             return
-        }
-        if (walletBusy) {
-            return  // Don't poll during wallet operations
-        }
         isLoading = true
-        if (errorLabel) {
+        if (errorLabel)
             errorLabel.text = ""
-        }
-        cliBridge.call("listtransactions", ["*", "50", "0", "true"], settingsManager.activeWallet)
+        cliBridge.call("listtransactions", ["*", "50", "0", "true"], selectedWallet)
     }
 
     Connections {
@@ -49,32 +46,29 @@ Page {
         }
         function onErrorOccurred(errorMessage) {
             isLoading = false
-            // MONOTONIC RULE: Transaction RPC errors NEVER invalidate activeWallet
-            // listtransactions failure = "loaded wallet with history error", NOT "unloaded wallet"
-            if (errorLabel) {
+            if (errorLabel)
                 errorLabel.text = errorMessage
-            }
-            // CRITICAL: Keep existing transactions - RPC error is temporary, wallet is still loaded
         }
     }
 
+    function refresh() {
+        if (selectedWallet !== "")
+            refreshHistory()
+    }
+
     Connections {
-        target: settingsManager
-        function onActiveWalletChanged() {
-            // Refresh history when active wallet changes
-            if (settingsManager.activeWallet !== "") {
-                Qt.callLater(refreshHistory) // Use callLater to ensure proper timing
-            } else {
-                transactions = []
-                errorLabel.text = ""
-            }
+        target: walletManager
+        function onLoadedWalletsChanged() {
+            if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && historyWalletCombo.currentIndex < 0)
+                historyWalletCombo.currentIndex = 0
         }
     }
 
     Component.onCompleted: {
-        if (hasWallet) {
+        if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && historyWalletCombo.currentIndex < 0)
+            historyWalletCombo.currentIndex = 0
+        if (selectedWallet !== "")
             refreshHistory()
-        }
     }
 
     ColumnLayout {
@@ -82,28 +76,36 @@ Page {
         anchors.margins: 20
         spacing: 20
 
-        // No active wallet banner
-        Rectangle {
+        RowLayout {
             Layout.fillWidth: true
-            height: 60
-            color: "#fff3cd"
-            border.color: "#ffc107"
-            border.width: 1
-            visible: !hasWallet
-            radius: 4
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 15
-
-                Text {
-                    Layout.fillWidth: true
-                    text: "No active wallet selected. Please load a wallet from the Wallets page."
-                    color: "#856404"
-                    font.pixelSize: 14
-                    wrapMode: Text.Wrap
+            spacing: 10
+            Label { text: "Wallet:"; font.pixelSize: 14 }
+            ComboBox {
+                id: historyWalletCombo
+                Layout.preferredWidth: 260
+                Layout.preferredHeight: 36
+                model: walletManager ? walletManager.wallets : []
+                onActivated: {
+                    if (walletManager && walletManager.wallets && index >= 0 && index < walletManager.wallets.length) {
+                        selectedWallet = walletManager.wallets[index]
+                        refreshHistory()
+                    }
+                }
+                onCurrentIndexChanged: {
+                    if (currentIndex >= 0 && walletManager && walletManager.wallets && currentIndex < walletManager.wallets.length) {
+                        var w = walletManager.wallets[currentIndex]
+                        if (w !== selectedWallet) {
+                            selectedWallet = w
+                            refreshHistory()
+                        }
+                    }
+                }
+                Component.onCompleted: {
+                    if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && currentIndex < 0)
+                        currentIndex = 0
                 }
             }
+            Item { Layout.fillWidth: true }
         }
 
         Text {
@@ -138,10 +140,7 @@ Page {
 
             Button {
                 text: "Refresh"
-                enabled: {
-                    if (!settingsManager || !walletManager) return false
-                    return settingsManager.qbitxCliPath !== "" && hasWallet && !walletBusy
-                }
+                enabled: settingsManager && settingsManager.qbitxCliPath !== "" && selectedWallet !== "" && !walletBusy
                 onClicked: refreshHistory()
             }
         }

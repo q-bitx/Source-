@@ -1036,6 +1036,7 @@ RPCHelpMan getnewaddress();
 RPCHelpMan getrawchangeaddress();
 RPCHelpMan getnewdilithiumaddress();
 RPCHelpMan pqsendfrom();
+RPCHelpMan pqsendtoaddress();
 RPCHelpMan setlabel();
 RPCHelpMan listaddressgroupings();
 RPCHelpMan addmultisigaddress();
@@ -1128,6 +1129,7 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &getnewaddress},
         {"wallet", &getnewdilithiumaddress},
         {"wallet", &pqsendfrom},
+        {"wallet", &pqsendtoaddress},
         {"wallet", &getrawchangeaddress},
         {"wallet", &getreceivedbyaddress},
         {"wallet", &getreceivedbylabel},

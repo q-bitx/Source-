@@ -10,6 +10,15 @@
 cmake_minimum_required(VERSION 3.22)
 project(QBitX)
 
+# Helper: find library from depends prefix only (no host /usr pollution)
+function(find_dep_lib outvar)
+  find_library(${outvar} NAMES ${ARGN}
+    PATHS ${CMAKE_FIND_ROOT_PATH} ${CMAKE_PREFIX_PATH}
+    PATH_SUFFIXES lib
+    NO_DEFAULT_PATH
+  )
+endfunction()
+
 # include(AddWindowsResources)
 # include(CheckSourceCompilesWithFlags)
 # configure_file(${CMAKE_SOURCE_DIR}/src/cmake/bitcoin-build-config.h.in ${CMAKE_BINARY_DIR}/config/bitcoin-build-config.h)
@@ -19,8 +28,10 @@ project(QBitX)
 include(CTest)
 enable_testing()
 
-include_directories(${CMAKE_SOURCE_DIR}/contrib/db4)
-link_directories(${CMAKE_SOURCE_DIR}/contrib/db4)
+if(WITH_BDB)
+  include_directories(${CMAKE_SOURCE_DIR}/contrib/db4)
+  link_directories(${CMAKE_SOURCE_DIR}/contrib/db4)
+endif()
 include_directories(${CMAKE_SOURCE_DIR}/src/common) #posle
 #include_directories(${CMAKE_SOURCE_DIR}/src/secp-install/include)
 include_directories(
@@ -38,6 +49,18 @@ set(BUILD_SUFFIX "")
 
 # Define ENABLE_WALLET option before configure_file so it's available for config header
 option(ENABLE_WALLET "Enable wallet functionality" ON)
+option(WITH_BDB "Enable Berkeley DB (BDB) wallet support." OFF)
+# Windows/MinGW: force BDB OFF - use SQLite wallet only. No /usr/include in cross-build.
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR MINGW)
+  add_compile_definitions(WIN32)
+  set(WITH_BDB OFF CACHE BOOL "BDB disabled on Windows" FORCE)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR MINGW)
+  set(_qbitx_windows_build TRUE)
+else()
+  set(_qbitx_windows_build FALSE)
+endif()
 
 configure_file(
   ${CMAKE_SOURCE_DIR}/src/bitcoin-build-config.h.in
@@ -54,7 +77,9 @@ include_directories("${CMAKE_BINARY_DIR}")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-add_compile_definitions(_POSIX_C_SOURCE=200809L)
+if(NOT _qbitx_windows_build)
+  add_compile_definitions(_POSIX_C_SOURCE=200809L)
+endif()
 option(BUILD_BITCOIN_TESTS "Build Bitcoin tests" OFF)
 option(BUILD_BITCOIN_UTILS "Build Bitcoin utils" OFF)
 
@@ -62,6 +87,11 @@ add_subdirectory(crypto/dilithium)
 
 add_subdirectory(src/univalue)
 include_directories(src/univalue/include)
+
+# Build secp256k1 in-tree (Bitcoin Core style); required before qbitx links to it
+set(SECP256K1_DISABLE_SHARED ON CACHE BOOL "" FORCE)
+set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "" FORCE)
+add_subdirectory(src/secp256k1)
 #find_package(univalue REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
@@ -98,7 +128,7 @@ add_executable(qbitx
     src/crypto/dilithium.cpp
     src/node/mini_miner.cpp
     src/wallet/transaction.cpp
-    src/wallet/migrate.cpp
+    $<$<BOOL:${WITH_BDB}>:src/wallet/migrate.cpp>
     src/wallet/context.cpp
     src/wallet/scriptpubkeyman.cpp
     src/interfaces/scheduler.cpp
@@ -297,22 +327,142 @@ add_executable(qbitx
     src/node/kernel_notifications.cpp
     src/node/caches.cpp
 )
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  get_target_property(_qbx_includes qbitx INCLUDE_DIRECTORIES)
+  if(_qbx_includes)
+    list(REMOVE_ITEM _qbx_includes "/usr/include")
+    set_target_properties(qbitx PROPERTIES INCLUDE_DIRECTORIES "${_qbx_includes}")
+  endif()
+endif()
 
-target_link_libraries(qbitx PRIVATE pqcrystals m univalue m  ${LIBEVENT_LIBRARIES} ${LEVELDB_LIB}
-    event_pthreads )
+# MinGW-w64: libevent from depends prefix, clock_gettime via Threads+winpthread, Windows sockets
+if(WIN32)
+  target_compile_definitions(qbitx PRIVATE SECP256K1_STATIC)
+  target_compile_options(qbitx PRIVATE -pthread)
+  target_link_options(qbitx PRIVATE -pthread)
 
+  find_dep_lib(EVENT_CORE_LIB event_core libevent_core)
+  find_dep_lib(EVENT_EXTRA_LIB event_extra libevent_extra)
+  find_dep_lib(EVENT_MAIN_LIB event libevent)
+  find_dep_lib(EVENT_PTHREADS_LIB event_pthreads libevent_pthreads event_threads libevent_threads)
+  if(NOT EVENT_CORE_LIB OR NOT EVENT_EXTRA_LIB)
+    message(FATAL_ERROR "libevent_core and libevent_extra required for WIN32; check depends prefix (CMAKE_FIND_ROOT_PATH, CMAKE_PREFIX_PATH)")
+  endif()
 
-# LevelDB
-include_directories(/usr/include/leveldb)
-find_library(LEVELDB_LIB leveldb REQUIRED)
-target_link_libraries(qbitx PRIVATE ${LEVELDB_LIB})
-target_link_libraries(qbitx PRIVATE event_pthreads)
-target_link_libraries(qbitx PRIVATE db_cxx)
+  target_link_libraries(qbitx PRIVATE
+    ${EVENT_EXTRA_LIB}
+    ${EVENT_CORE_LIB}
+  )
+  if(EVENT_MAIN_LIB)
+    target_link_libraries(qbitx PRIVATE ${EVENT_MAIN_LIB})
+  endif()
+  if(EVENT_PTHREADS_LIB)
+    target_link_libraries(qbitx PRIVATE ${EVENT_PTHREADS_LIB})
+  endif()
 
-# Wallet support
+  target_link_libraries(qbitx PRIVATE ws2_32 iphlpapi winmm)
+
+  set(THREADS_PREFER_PTHREAD_FLAG ON)
+  find_package(Threads REQUIRED)
+  target_link_libraries(qbitx PRIVATE Threads::Threads)
+
+  find_library(WINPTHREAD_LIB NAMES winpthread winpthreads
+    PATHS ${CMAKE_FIND_ROOT_PATH} ${CMAKE_PREFIX_PATH}
+    PATH_SUFFIXES lib
+    NO_DEFAULT_PATH
+  )
+  if(WINPTHREAD_LIB)
+    target_link_libraries(qbitx PRIVATE ${WINPTHREAD_LIB})
+  else()
+    target_link_libraries(qbitx PRIVATE winpthread)
+  endif()
+endif()
+
+# LevelDB discovery: prefer depends for cross builds, system library for native Linux
+set(QBITX_DEPENDS_PREFIX "" CACHE PATH "Depends install prefix (e.g. depends/x86_64-pc-linux-gnu). If set, used for LevelDB and prepended to CMAKE_PREFIX_PATH.")
+set(_use_depends_leveldb FALSE)
+
+# Determine if we should use depends LevelDB:
+# - Cross-compiling (Windows/MinGW or other cross targets)
+# - QBITX_DEPENDS_PREFIX is explicitly set
+# - CMAKE_FIND_ROOT_PATH is set (indicates toolchain/depends usage)
+if(CMAKE_CROSSCOMPILING OR WIN32 OR MINGW OR QBITX_DEPENDS_PREFIX OR CMAKE_FIND_ROOT_PATH)
+  set(_use_depends_leveldb TRUE)
+endif()
+
+if(_use_depends_leveldb)
+  # Cross builds or explicit depends: use CONFIG mode from depends prefix
+  if(QBITX_DEPENDS_PREFIX)
+    list(PREPEND CMAKE_PREFIX_PATH "${QBITX_DEPENDS_PREFIX}")
+  endif()
+  # Restrict LevelDB search to depends prefix and CMAKE_PREFIX_PATH (excluding /usr/local)
+  set(_leveldb_search "")
+  if(QBITX_DEPENDS_PREFIX)
+    list(APPEND _leveldb_search "${QBITX_DEPENDS_PREFIX}")
+  endif()
+  foreach(_p IN LISTS CMAKE_PREFIX_PATH CMAKE_FIND_ROOT_PATH)
+    if(NOT _p MATCHES "^/usr/local$" AND NOT _p MATCHES "^/usr/local/")
+      list(APPEND _leveldb_search "${_p}")
+    endif()
+  endforeach()
+  find_package(leveldb CONFIG QUIET
+    HINTS ${_leveldb_search}
+    NO_DEFAULT_PATH
+  )
+  if(leveldb_DIR MATCHES "^/usr/local")
+    message(FATAL_ERROR "Do not use /usr/local LevelDB. Use depends-built LevelDB (run depends first, then cmake with -DQBITX_DEPENDS_PREFIX=<depends_prefix> or -DCMAKE_PREFIX_PATH=<depends_prefix>).")
+  endif()
+  if(NOT leveldb_FOUND)
+    message(FATAL_ERROR "LevelDB not found in depends prefix. For cross builds, run: make -C depends HOST=<host-triplet>")
+  endif()
+  # Link to depends LevelDB (static, RTTI enabled via patch)
+  target_link_libraries(qbitx PRIVATE leveldb::leveldb)
+else()
+  # Native Linux: use system LevelDB (dynamic linking OK, from apt packages)
+  # Search only standard system paths (not /usr/local)
+  find_library(LEVELDB_LIB
+    NAMES leveldb
+    PATHS /usr/lib /usr/lib/x86_64-linux-gnu /lib /lib/x86_64-linux-gnu
+    NO_DEFAULT_PATH
+  )
+  find_path(LEVELDB_INCLUDE_DIR
+    NAMES leveldb/db.h
+    PATHS /usr/include
+    NO_DEFAULT_PATH
+  )
+  
+  if(LEVELDB_LIB AND LEVELDB_INCLUDE_DIR)
+    # Create imported target for system LevelDB
+    if(NOT TARGET leveldb::leveldb)
+      add_library(leveldb::leveldb SHARED IMPORTED)
+      set_target_properties(leveldb::leveldb PROPERTIES
+        IMPORTED_LOCATION "${LEVELDB_LIB}"
+        INTERFACE_INCLUDE_DIRECTORIES "${LEVELDB_INCLUDE_DIR}"
+      )
+    endif()
+    target_link_libraries(qbitx PRIVATE leveldb::leveldb)
+  else()
+    message(FATAL_ERROR "LevelDB not found. Install it with:\n"
+      "  Ubuntu/Debian: sudo apt-get install -y libleveldb1d libleveldb-dev\n"
+      "  Or use depends: make -C depends HOST=x86_64-pc-linux-gnu && cmake -B build -DQBITX_DEPENDS_PREFIX=$(pwd)/depends/x86_64-pc-linux-gnu")
+  endif()
+endif()
+
+target_link_libraries(qbitx PRIVATE pqcrystals m univalue m secp256k1)
+if(NOT WIN32)
+  target_link_libraries(qbitx PRIVATE ${LIBEVENT_LIBRARIES} event_pthreads)
+endif()
+# Berkeley DB: only link when WITH_BDB
+if(WITH_BDB)
+  target_link_libraries(qbitx PRIVATE db_cxx)
+endif()
+
+# Wallet support: compile defs now; link to bitcoin_wallet deferred until after add_subdirectory(src/wallet)
 if(ENABLE_WALLET)
   target_compile_definitions(qbitx PRIVATE ENABLE_WALLET=1)
-  target_link_libraries(qbitx PRIVATE bitcoin_wallet)
+  if(WITH_BDB)
+    target_compile_definitions(qbitx PRIVATE USE_BDB=1)
+  endif()
 endif()
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
   message(FATAL_ERROR "In-source builds are not allowed.")
@@ -399,7 +549,7 @@ include(CMakeDependentOption)
     # Use of the `unofficial::` namespace is a vcpkg package manager convention.
    
  find_package(SQLite3 3.7.17 REQUIRED)
-option(WITH_BDB "Enable Berkeley DB (BDB) wallet support." OFF)
+# WITH_BDB is defined earlier (before qbitx target); forced OFF on Windows
 cmake_dependent_option(WARN_INCOMPATIBLE_BDB "Warn when using a Berkeley DB (BDB) version other than 4.8." ON "WITH_BDB" OFF)
 if(WITH_BDB)
   find_package(BerkeleyDB 4.8 MODULE REQUIRED)
@@ -500,6 +650,12 @@ target_link_libraries(core_interface INTERFACE
   $<$<CONFIG:RelWithDebInfo>:core_interface_relwithdebinfo>
   $<$<CONFIG:Debug>:core_interface_debug>
 )
+
+# Add wallet subdir BEFORE linking qbitx to bitcoin_wallet (bitcoin_wallet must exist first)
+if(ENABLE_WALLET)
+  add_subdirectory(src/wallet)
+  target_link_libraries(qbitx PRIVATE bitcoin_wallet)
+endif()
 
 
 if(BUILD_FOR_FUZZING)
@@ -902,12 +1058,18 @@ endif()
 #  enable_testing()
 #endif()
 
-if(BUILD_BITCOIN_TESTS)
-  enable_testing()
-  add_subdirectory(src/test)
-else()
-  enable_testing()
-  add_subdirectory(src/test/pq)
+# Tests require Boost headers; skip test subdirs on WIN32 cross-build to avoid boost/test/*.hpp not found
+if(WIN32)
+  set(BUILD_TESTING OFF)
+endif()
+if(NOT WIN32)
+  if(BUILD_BITCOIN_TESTS)
+    enable_testing()
+    add_subdirectory(src/test)
+  else()
+    enable_testing()
+    add_subdirectory(src/test/pq)
+  endif()
 endif()
 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.29)
@@ -946,25 +1108,12 @@ message("  qbitx ................................ ON")
 # We want all build properties to be encapsulated properly.
 include(WarnAboutGlobalProperties)
 #add_subdirectory(src/test)
-if(ENABLE_WALLET)
-  add_subdirectory(src/wallet)
-endif()
+# src/wallet added earlier (before qbitx link) when ENABLE_WALLET
 #add_executable(test_standard src/test/test_standard.cpp)
 #target_link_libraries(test_standard ${Boost_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
 
 #add_test(test_standard test_standard)
 #add_test(NAME test_bitcoin COMMAND test_bitcoin)
-#include_directories(${CMAKE_SOURCE_DIR}/src/secp-install/include)
-
-#link_directories(${CMAKE_SOURCE_DIR}/src/secp-install/lib)
-
-#target_link_libraries(qbitx PRIVATE secp256k1)
-include_directories(${CMAKE_SOURCE_DIR}/src/secp-install/include)
-
-link_directories(${CMAKE_SOURCE_DIR}/src/secp-install/lib)
-target_link_libraries(qbitx PRIVATE ${CMAKE_SOURCE_DIR}/src/secp-install/lib/libsecp256k1.a)
-#target_link_libraries(qbitx PRIVATE secp256k1)
-
 # -------------------------
 # qbitx-cli (RPC client)
 # -------------------------
@@ -1007,4 +1156,50 @@ get_target_property(QBITX_LINK_LIBS qbitx LINK_LIBRARIES)
 if (NOT QBITX_LINK_LIBS)
   message(FATAL_ERROR "qbitx LINK_LIBRARIES empty/NOTFOUND. Move qbitx-cli block AFTER all target_link_libraries(qbitx ...).")
 endif()
-target_link_libraries(qbitx-cli PRIVATE ${QBITX_LINK_LIBS})
+target_link_libraries(qbitx-cli PRIVATE ${QBITX_LINK_LIBS} secp256k1)
+if(WIN32)
+  target_compile_definitions(qbitx-cli PRIVATE SECP256K1_STATIC)
+  target_link_libraries(qbitx-cli PRIVATE
+    ${EVENT_EXTRA_LIB}
+    ${EVENT_CORE_LIB}
+  )
+  if(EVENT_MAIN_LIB)
+    target_link_libraries(qbitx-cli PRIVATE ${EVENT_MAIN_LIB})
+  endif()
+  if(EVENT_PTHREADS_LIB)
+    target_link_libraries(qbitx-cli PRIVATE ${EVENT_PTHREADS_LIB})
+  endif()
+  target_link_libraries(qbitx-cli PRIVATE Threads::Threads ws2_32 iphlpapi winmm)
+  if(WINPTHREAD_LIB)
+    target_link_libraries(qbitx-cli PRIVATE ${WINPTHREAD_LIB})
+  else()
+    target_link_libraries(qbitx-cli PRIVATE winpthread)
+  endif()
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  function(_strip_usr_include_from_dir dir)
+    get_property(_targets DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(tgt IN LISTS _targets)
+      if(TARGET ${tgt})
+        get_target_property(_incs ${tgt} INCLUDE_DIRECTORIES)
+        if(_incs)
+          list(REMOVE_ITEM _incs "/usr/include")
+          set_target_properties(${tgt} PROPERTIES INCLUDE_DIRECTORIES "${_incs}")
+        endif()
+
+        get_target_property(_sysincs ${tgt} SYSTEM_INCLUDE_DIRECTORIES)
+        if(_sysincs)
+          list(REMOVE_ITEM _sysincs "/usr/include")
+          set_target_properties(${tgt} PROPERTIES SYSTEM_INCLUDE_DIRECTORIES "${_sysincs}")
+        endif()
+      endif()
+    endforeach()
+
+    get_property(_subdirs DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
+    foreach(sd IN LISTS _subdirs)
+      _strip_usr_include_from_dir("${sd}")
+    endforeach()
+  endfunction()
+
+  _strip_usr_include_from_dir("${CMAKE_CURRENT_SOURCE_DIR}")
+endif()

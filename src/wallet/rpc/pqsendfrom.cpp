@@ -28,9 +28,11 @@
 #include <wallet/rpc/util.h>
 #include <wallet/wallet.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <set>
 #include <vector>
 
 namespace wallet {
@@ -199,6 +201,15 @@ RPCHelpMan pqsendfrom()
                 foundKey = true;
                 break;
             }
+        }
+
+        // Legacy wallet fallback: keys stored in map_dilithium_priv / map_dilithium_pub
+        if (!foundKey && wallet->map_dilithium_priv.count(keyid) > 0) {
+            privkeyBytes = wallet->map_dilithium_priv[keyid];
+            if (wallet->map_dilithium_pub.count(keyid) > 0) {
+                pubkeyBytes = wallet->map_dilithium_pub[keyid];
+            }
+            foundKey = true;
         }
 
         if (!foundKey) {
@@ -459,5 +470,6 @@ RPCHelpMan pqsendfrom()
     },
     };
 }
+
 
 } // namespace wallet

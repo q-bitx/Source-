@@ -2,6 +2,8 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QBitX 1.0
+import "components" 1.0
+import "pages" as Pages
 
 ApplicationWindow {
     id: window
@@ -12,19 +14,48 @@ ApplicationWindow {
 
     property int currentPage: 0
 
-    // Startup logic to check for loaded wallets
+    function triggerPageRefresh() {
+        if (currentPage === 0 && dashboardPage) dashboardPage.refresh()
+        else if (currentPage === 1 && walletsPage) walletsPage.refresh()
+        else if (currentPage === 2 && addressesPage) addressesPage.refresh()
+        else if (currentPage === 3 && sendPage) sendPage.refresh()
+        else if (currentPage === 4 && historyPage) historyPage.refresh()
+        else if (currentPage === 5 && logsPage) logsPage.refresh()
+        else if (currentPage === 6 && settingsPage) settingsPage.refresh()
+    }
+
+    function triggerRefreshAll() {
+        if (dashboardPage) dashboardPage.refresh()
+        if (walletsPage) walletsPage.refresh()
+        if (addressesPage) addressesPage.refresh()
+        if (sendPage) sendPage.refresh()
+        if (historyPage) historyPage.refresh()
+        if (logsPage) logsPage.refresh()
+        if (settingsPage) settingsPage.refresh()
+    }
+
+    // Startup: listwallets + trigger first-page refresh
     Component.onCompleted: {
-        // Give a small delay to ensure all components are initialized
         Qt.callLater(function() {
-            if (settingsManager.qbitxCliPath !== "") {
-                // Check if any wallets are already loaded
+            if (settingsManager.effectiveQbitxCliPath() !== "" && settingsManager.checkCliAvailable())
                 cliBridge.call("listwallets", [], "")
-            }
+            triggerPageRefresh()
         })
     }
 
     // REMOVED: Global auto-selection moved entirely to Wallets.qml for monotonic control
-    // The Wallets.qml will handle ALL wallet selection with proper monotonic state guards
+    // REMOVED: Input diagnosis probe (fullscreen Item+MouseArea) — it was blocking all clicks; no MouseArea in main.qml.
+
+    // Optional debug label: does NOT capture input (no MouseArea/TapHandler). Off by default.
+    Text {
+        visible: false
+        enabled: false
+        text: "Top item"
+        font.pixelSize: 10
+        color: "#888"
+        x: 8
+        y: 8
+    }
 
     RowLayout {
         anchors.fill: parent
@@ -32,71 +63,53 @@ ApplicationWindow {
 
         // Sidebar navigation
         Rectangle {
-            Layout.preferredWidth: 200
+            Layout.preferredWidth: 260
             Layout.fillHeight: true
-            color: "#2b2b2b"
+            color: "#1a1a1a"
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 5
+                anchors.margins: 12
+                spacing: 8
 
                 Text {
                     Layout.fillWidth: true
-                    text: "qbitx-gui"
+                    text: "Q-BitX"
                     font.pixelSize: 20
                     font.bold: true
                     color: "white"
                     padding: 10
                 }
 
-                Button {
-                    Layout.fillWidth: true
+                SidebarButton {
                     text: "Dashboard"
-                    highlighted: currentPage === 0
-                    onClicked: currentPage = 0
+                    active: currentPage === 0
+                    onClicked: { currentPage = 0; triggerPageRefresh() }
                 }
-
-                Button {
-                    Layout.fillWidth: true
+                SidebarButton {
                     text: "Wallets"
-                    highlighted: currentPage === 1
-                    onClicked: currentPage = 1
+                    active: currentPage === 1
+                    onClicked: { currentPage = 1; triggerPageRefresh() }
                 }
-
-                Button {
-                    Layout.fillWidth: true
+                SidebarButton {
                     text: "Addresses"
-                    highlighted: currentPage === 2
-                    onClicked: currentPage = 2
+                    active: currentPage === 2
+                    onClicked: { currentPage = 2; triggerPageRefresh() }
                 }
-
-                Button {
-                    Layout.fillWidth: true
-                    text: "Balance"
-                    highlighted: currentPage === 3
-                    onClicked: currentPage = 3
-                }
-
-                Button {
-                    Layout.fillWidth: true
+                SidebarButton {
                     text: "Send"
-                    highlighted: currentPage === 4
-                    onClicked: currentPage = 4
+                    active: currentPage === 3
+                    onClicked: { currentPage = 3; triggerPageRefresh() }
                 }
-
-                Button {
-                    Layout.fillWidth: true
+                SidebarButton {
                     text: "History"
-                    highlighted: currentPage === 5
-                    onClicked: currentPage = 5
+                    active: currentPage === 4
+                    onClicked: { currentPage = 4; triggerPageRefresh() }
                 }
-
-                Button {
-                    Layout.fillWidth: true
-                    text: "Settings"
-                    highlighted: currentPage === 6
-                    onClicked: currentPage = 6
+                SidebarButton {
+                    text: "Logs"
+                    active: currentPage === 5
+                    onClicked: { currentPage = 5; triggerPageRefresh() }
                 }
 
                 Item { Layout.fillHeight: true }
@@ -109,13 +122,13 @@ ApplicationWindow {
             Layout.fillHeight: true
             currentIndex: currentPage
 
-            Dashboard { }
-            Wallets { }
-            Addresses { }
-            Balance { }
-            Send { }
-            History { }
-            Settings { }
+            Pages.Dashboard { id: dashboardPage }
+            Pages.Wallets { id: walletsPage }
+            Pages.Addresses { id: addressesPage }
+            Pages.Send { id: sendPage }
+            Pages.History { id: historyPage }
+            Pages.Logs { id: logsPage }
+            Pages.Settings { id: settingsPage }
         }
     }
 }

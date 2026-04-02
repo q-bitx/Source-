@@ -1,4 +1,4 @@
-// Copyright (c) 2017-present The Bitcoin Core developers
+//Copyright (c) 2017-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -17,7 +17,9 @@
 #include <system_error>
 #include <type_traits>
 #include <utility>
-
+#ifdef WIN32
+#include <windows.h>
+#endif
 /** Filesystem operations and types */
 //namespace fs {
 //using std::filesystem;
@@ -179,12 +181,23 @@ static inline bool copy_file(const fs::path& from, const fs::path& to, fs::copy_
   //  return std::filesystem::path(string);
 //#endif
 //}
-static inline std::string PathToString(const fs::path& path)
+
+inline std::string PathToString(const fs::path& path)
 {
 #ifdef WIN32
-    return path.utf8string();
+    // On Windows, filesystem::path uses wchar_t internally.
+    // Convert to UTF-8 so logs/RPC/etc stay consistent.
+    const std::wstring w = path.native();
+
+    if (w.empty()) return std::string();
+
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    if (size_needed <= 0) return std::string();
+
+    std::string out(size_needed, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), out.data(), size_needed, nullptr, nullptr);
+    return out;
 #else
-    static_assert(std::is_same_v<fs::path::string_type, std::string>, "PathToString not implemented for non-std::string path");
     return path.string();
 #endif
 }

@@ -1,0 +1,8 @@
+module pages
+Dashboard 1.0 Dashboard.qml
+Wallets 1.0 Wallets.qml
+Addresses 1.0 Addresses.qml
+Send 1.0 Send.qml
+History 1.0 History.qml
+Logs 1.0 Logs.qml
+Settings 1.0 Settings.qml

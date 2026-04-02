@@ -1,0 +1,5 @@
+/home/sus/qbitx_restore/qbitx-gui/build-win/qbitx-gui_autogen/include/../EWIEGA46WW/moc_clibridge.cpp.json
+/home/sus/qbitx_restore/qbitx-gui/build-win/qbitx-gui_autogen/include/../EWIEGA46WW/moc_clirunner.cpp.json
+/home/sus/qbitx_restore/qbitx-gui/build-win/qbitx-gui_autogen/include/../EWIEGA46WW/moc_logmanager.cpp.json
+/home/sus/qbitx_restore/qbitx-gui/build-win/qbitx-gui_autogen/include/../EWIEGA46WW/moc_settingsmanager.cpp.json
+/home/sus/qbitx_restore/qbitx-gui/build-win/qbitx-gui_autogen/include/../EWIEGA46WW/moc_walletmanager.cpp.json

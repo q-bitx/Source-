@@ -13,13 +13,19 @@ class SettingsManager : public QObject
     Q_PROPERTY(QString rpcuser READ rpcuser WRITE setRpcuser NOTIFY rpcuserChanged)
     Q_PROPERTY(QString rpcpassword READ rpcpassword WRITE setRpcpassword NOTIFY rpcpasswordChanged)
     Q_PROPERTY(QString network READ network WRITE setNetwork NOTIFY networkChanged)
-    Q_PROPERTY(QString activeWallet READ activeWallet WRITE setActiveWallet NOTIFY activeWalletChanged)
+    Q_PROPERTY(bool useAutoDetectCli READ useAutoDetectCli WRITE setUseAutoDetectCli NOTIFY useAutoDetectCliChanged)
+    Q_PROPERTY(QString lastCliCheckError READ lastCliCheckError NOTIFY lastCliCheckErrorChanged)
 
 public:
     explicit SettingsManager(QObject *parent = nullptr);
 
     QString qbitxCliPath() const { return m_qbitxCliPath; }
     void setQbitxCliPath(const QString &path);
+    /** Effective path: QBITX_CLI_PATH env, else stored path, else default build_wallet2 path; relative resolved against app dir. */
+    Q_INVOKABLE QString effectiveQbitxCliPath() const;
+    /** Returns true if effective path exists and is executable; if error is non-null, sets it. Also updates lastCliCheckError. QML calls with no args and reads lastCliCheckError. */
+    Q_INVOKABLE bool checkCliAvailable(QString *error = nullptr);
+    QString lastCliCheckError() const { return m_lastCliCheckError; }
 
     QString datadir() const { return m_datadir; }
     void setDatadir(const QString &dir);
@@ -33,8 +39,8 @@ public:
     QString network() const { return m_network; }
     void setNetwork(const QString &net);
 
-    QString activeWallet() const { return m_activeWallet; }
-    void setActiveWallet(const QString &wallet);
+    bool useAutoDetectCli() const { return m_useAutoDetectCli; }
+    void setUseAutoDetectCli(bool on);
 
     Q_INVOKABLE void autoDetectCliPath();
     Q_INVOKABLE void setWalletOrigin(const QString &walletName, const QString &origin); // "imported" or "local"
@@ -46,7 +52,8 @@ signals:
     void rpcuserChanged();
     void rpcpasswordChanged();
     void networkChanged();
-    void activeWalletChanged();
+    void useAutoDetectCliChanged();
+    void lastCliCheckErrorChanged();
 
 private:
     QSettings m_settings;
@@ -55,9 +62,11 @@ private:
     QString m_rpcuser;
     QString m_rpcpassword;
     QString m_network;
-    QString m_activeWallet;
+    bool m_useAutoDetectCli;
+    mutable QString m_lastCliCheckError;
 
     void loadSettings();
+    void setLastCliCheckError(const QString &err);
 };
 
 #endif // SETTINGSMANAGER_H

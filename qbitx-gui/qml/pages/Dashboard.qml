@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import "../components" 1.0
 
 Page {
     id: dashboardPage
@@ -11,18 +12,29 @@ Page {
     property bool hasNetworkInfo: false
     property string lastError: ""
     property bool walletBusy: walletManager ? walletManager.walletBusy : false
+    property bool cliAvailable: false
+
+    function refresh() {
+        if (walletBusy)
+            return
+        cliAvailable = settingsManager.checkCliAvailable()
+        if (!cliAvailable) {
+            lastError = settingsManager.lastCliCheckError
+            if (logManager)
+                logManager.append("ERROR", "Dashboard: " + lastError)
+            return
+        }
+        lastError = ""
+        cliBridge.call("getblockchaininfo")
+        cliBridge.call("getnetworkinfo")
+    }
 
     Timer {
         id: refreshTimer
-        interval: 5000 // 5 seconds
-        running: settingsManager.qbitxCliPath !== "" && visible && !walletBusy
+        interval: 5000
+        running: visible && !walletBusy
         repeat: true
-        onTriggered: {
-            if (settingsManager.qbitxCliPath !== "" && !walletBusy) {
-                cliBridge.call("getblockchaininfo")
-                cliBridge.call("getnetworkinfo")
-            }
-        }
+        onTriggered: refresh()
     }
 
     Connections {
@@ -42,155 +54,167 @@ Page {
             }
         }
         function onErrorOccurred(errorMessage) {
-            console.log("Error:", errorMessage)
             lastError = errorMessage
-            // Keep last known values, don't reset to N/A
+            if (logManager)
+                logManager.append("ERROR", "Dashboard RPC: " + errorMessage)
+            // Keep last known values; do not overwrite blockchainInfo/networkInfo
         }
     }
 
     Component.onCompleted: {
         refreshTimer.start()
+        refresh()
     }
 
     ScrollView {
         anchors.fill: parent
-        anchors.margins: 20
+        anchors.topMargin: 24
+        anchors.leftMargin: 24
+        anchors.rightMargin: 24
+        anchors.bottomMargin: 24
 
         ColumnLayout {
-            width: dashboardPage.width - 40
-            spacing: 20
+            width: dashboardPage.width - 48
+            spacing: 24
+            Layout.alignment: Qt.AlignHCenter
 
-            Text {
-                text: "Dashboard"
-                font.pixelSize: 24
-                font.bold: true
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                height: 50
-                color: "#fff3cd"
-                border.color: "#ffc107"
-                border.width: 1
-                visible: settingsManager.qbitxCliPath === ""
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 10
-
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 12
+                Text {
+                    text: "Dashboard"
+                    font.pixelSize: 22
+                    font.bold: true
+                }
+                Rectangle {
+                    visible: lastError !== ""
+                    Layout.preferredHeight: 26
+                    Layout.preferredWidth: 110
+                    radius: 4
+                    color: "#f8d7da"
+                    border.color: "#dc3545"
+                    border.width: 1
                     Text {
-                        Layout.fillWidth: true
-                        text: "Configure qbitx-cli in Settings"
-                        color: "#856404"
-                        font.pixelSize: 14
+                        anchors.centerIn: parent
+                        text: "Disconnected"
+                        font.pixelSize: 12
+                        color: "#721c24"
                     }
                 }
             }
 
-            Rectangle {
-                Layout.fillWidth: true
-                height: 40
-                color: "#f8d7da"
-                border.color: "#dc3545"
-                border.width: 1
-                visible: lastError !== ""
+            StatusPanel {
+                message: !cliAvailable ? "Configure qbitx-cli in Settings or set QBITX_CLI_PATH" : ""
+                panelType: "warning"
+            }
 
-                Text {
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    text: "Error: " + lastError
-                    color: "#721c24"
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                }
+            StatusPanel {
+                message: lastError !== "" ? ("Error: " + lastError) : ""
+                panelType: "error"
             }
 
             GroupBox {
                 Layout.fillWidth: true
+                Layout.maximumWidth: 720
+                Layout.alignment: Qt.AlignHCenter
                 title: "Blockchain Info"
+                font.pixelSize: 22
+                font.bold: true
 
                 GridLayout {
                     anchors.fill: parent
                     columns: 2
 
-                    Text { text: "Chain:" }
-                    Text { 
-                        text: hasBlockchainInfo && blockchainInfo.chain !== undefined 
-                              ? blockchainInfo.chain 
-                              : (settingsManager.qbitxCliPath === "" ? "Configure settings" : "N/A")
+                    Text { text: "Chain:"; font.pixelSize: 16 }
+                    Text {
+                        text: hasBlockchainInfo && blockchainInfo.chain !== undefined
+                              ? blockchainInfo.chain
+                              : (!cliAvailable ? "Configure settings" : "—")
+                        font.pixelSize: 16
+                        font.weight: Font.DemiBold
                     }
 
-                    Text { text: "Blocks:" }
-                    Text { 
-                        text: hasBlockchainInfo && blockchainInfo.blocks !== undefined 
-                              ? blockchainInfo.blocks 
-                              : (settingsManager.qbitxCliPath === "" ? "Configure settings" : "N/A")
+                    Text { text: "Blocks:"; font.pixelSize: 16 }
+                    Text {
+                        text: hasBlockchainInfo && blockchainInfo.blocks !== undefined
+                              ? blockchainInfo.blocks
+                              : (!cliAvailable ? "Configure settings" : "—")
+                        font.pixelSize: 16
+                        font.weight: Font.DemiBold
                     }
 
-                    Text { text: "Headers:" }
-                    Text { 
-                        text: hasBlockchainInfo && blockchainInfo.headers !== undefined 
-                              ? blockchainInfo.headers 
-                              : (settingsManager.qbitxCliPath === "" ? "Configure settings" : "N/A")
+                    Text { text: "Headers:"; font.pixelSize: 16 }
+                    Text {
+                        text: hasBlockchainInfo && blockchainInfo.headers !== undefined
+                              ? blockchainInfo.headers
+                              : (!cliAvailable ? "Configure settings" : "—")
+                        font.pixelSize: 16
+                        font.weight: Font.DemiBold
                     }
 
-                    Text { text: "Verification Progress:" }
-                    Text { 
-                        text: hasBlockchainInfo && blockchainInfo.verificationprogress !== undefined
-                              ? (blockchainInfo.verificationprogress * 100).toFixed(2) + "%"
-                              : (settingsManager.qbitxCliPath === "" ? "Configure settings" : "N/A")
+                    Text { text: "Verification Progress:"; font.pixelSize: 16 }
+                    Text {
+                        text: {
+                            if (!cliAvailable) return "Configure settings"
+                            if (!hasBlockchainInfo) return "—"
+                            if (blockchainInfo.initialblockdownload === false) return "Synced"
+                            var blocks = blockchainInfo.blocks
+                            var headers = blockchainInfo.headers
+                            if (blocks === undefined || headers === undefined || headers <= 0) return "—"
+                            var pct = Math.min(100, Math.max(0, (blocks / headers) * 100))
+                            return pct.toFixed(2) + "%"
+                        }
+                        font.pixelSize: 16
+                        font.weight: Font.DemiBold
                     }
 
-                    Text { text: "Difficulty:" }
-                    Text { 
+                    Text { text: "Difficulty:"; font.pixelSize: 16 }
+                    Text {
                         text: hasBlockchainInfo && blockchainInfo.difficulty !== undefined
                               ? blockchainInfo.difficulty
-                              : (settingsManager.qbitxCliPath === "" ? "Configure settings" : "N/A")
-                    }
-
-                    Text { text: "Network Active:" }
-                    Text { 
-                        text: hasBlockchainInfo && blockchainInfo.networkactive !== undefined
-                              ? (blockchainInfo.networkactive ? "Yes" : "No")
-                              : (settingsManager.qbitxCliPath === "" ? "Configure settings" : "N/A")
+                              : (!cliAvailable ? "Configure settings" : "—")
+                        font.pixelSize: 16
+                        font.weight: Font.DemiBold
                     }
                 }
             }
 
             GroupBox {
                 Layout.fillWidth: true
+                Layout.maximumWidth: 720
+                Layout.alignment: Qt.AlignHCenter
                 title: "Network Info"
+                font.pixelSize: 22
+                font.bold: true
 
                 GridLayout {
                     anchors.fill: parent
                     columns: 2
 
-                    Text { text: "Version:" }
-                    Text { 
+                    Text { text: "Version:"; font.pixelSize: 16 }
+                    Text {
                         text: hasNetworkInfo && networkInfo.version !== undefined
                               ? networkInfo.version
-                              : (settingsManager.qbitxCliPath === "" ? "Configure settings" : "N/A")
+                              : (!cliAvailable ? "Configure settings" : "—")
+                        font.pixelSize: 16
+                        font.weight: Font.DemiBold
                     }
 
-                    Text { text: "Subversion:" }
-                    Text { 
-                        text: hasNetworkInfo && networkInfo.subversion !== undefined
-                              ? networkInfo.subversion
-                              : (settingsManager.qbitxCliPath === "" ? "Configure settings" : "N/A")
-                    }
-
-                    Text { text: "Connections:" }
-                    Text { 
+                    Text { text: "Connections:"; font.pixelSize: 16 }
+                    Text {
                         text: hasNetworkInfo && networkInfo.connections !== undefined
                               ? networkInfo.connections
-                              : (settingsManager.qbitxCliPath === "" ? "Configure settings" : "N/A")
+                              : (!cliAvailable ? "Configure settings" : "—")
+                        font.pixelSize: 16
+                        font.weight: Font.DemiBold
                     }
 
-                    Text { text: "Network Active:" }
-                    Text { 
-                        text: hasNetworkInfo && networkInfo.networkactive !== undefined
-                              ? (networkInfo.networkactive ? "Yes" : "No")
-                              : (settingsManager.qbitxCliPath === "" ? "Configure settings" : "N/A")
+                    Text { text: "Network Active:"; font.pixelSize: 16 }
+                    Text {
+                        text: !cliAvailable ? "Configure settings"
+                              : (hasNetworkInfo ? (networkInfo.networkactive !== undefined ? (networkInfo.networkactive ? "Yes" : "No") : "—") : "—")
+                        font.pixelSize: 16
+                        font.weight: Font.DemiBold
                     }
                 }
             }

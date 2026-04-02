@@ -6,6 +6,10 @@
 #ifndef BITCOIN_SYNC_H
 #define BITCOIN_SYNC_H
 
+#ifdef WIN32
+#include <compat/compat.h>
+#endif
+
 #ifdef DEBUG_LOCKCONTENTION
 #include <logging.h>
 #include <logging/timer.h>
@@ -239,6 +243,25 @@ public:
      };
      friend class reverse_lock;
 };
+
+#ifdef WIN32
+#ifdef LOCK
+#undef LOCK
+#endif
+#ifdef LOCK2
+#undef LOCK2
+#endif
+#ifdef TRY_LOCK
+#undef TRY_LOCK
+#endif
+#ifdef WAIT_LOCK
+#undef WAIT_LOCK
+#endif
+#ifdef UNIQUE_NAME
+#undef UNIQUE_NAME
+#endif
+#define UNIQUE_NAME(name) PASTE2(name, __COUNTER__)
+#endif
 
 #define REVERSE_LOCK(g) typename std::decay<decltype(g)>::type::reverse_lock UNIQUE_NAME(revlock)(g, #g, __FILE__, __LINE__)
 
