@@ -112,4 +112,4 @@ EOF
 
 ### For send coins 
 ### there are three types of fee - low\normal\high
-./qbitx-cli -rpcwallet=pqwallet pqsendfrom "FROMYOURADDRESS"  "TOADDRESS" 5.0 normal 
+./qbitx-cli -rpcwallet=pqwallet pqsendtoaddress"FROMYOURADDRESS"  "TOADDRESS" 5.0 normal 
