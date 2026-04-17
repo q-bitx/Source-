@@ -27,7 +27,7 @@ class arith_uint256;
 std::optional<arith_uint256> DeriveTarget(unsigned int nBits, const uint256 pow_limit);
 
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params&);
-/** LWMA-1 per-block difficulty adjustment (active from nLWMAHeight onward) */
+/** LWMA per-block difficulty adjustment (active from nLWMAHeight onward) */
 unsigned int LwmaGetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader* pblock, const Consensus::Params&);
 unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nFirstBlockTime, const Consensus::Params&);
 
