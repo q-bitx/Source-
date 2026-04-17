@@ -102,6 +102,8 @@ public:
         consensus.nPowTargetSpacing = 150;
         consensus.nPowEmergencyWindow = 12 * 25 * 25; //2h + 5 minutes (7500 sec)
         consensus.fPowEnableEmergencyDifficultyDrop = true;
+        consensus.nLWMAHeight = 200001;
+        consensus.nLWMAWindow = 18;
         consensus.fPowAllowMinDifficultyBlocks = false;
         consensus.enforce_BIP94 = false;
         consensus.fPowNoRetargeting = false;
@@ -231,6 +233,8 @@ public:
         consensus.powLimit = uint256{"1fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 2016 * 150; // two weeks
         consensus.nPowTargetSpacing = 150;
+        consensus.nLWMAHeight = 200001;
+        consensus.nLWMAWindow = 18;
         consensus.fPowAllowMinDifficultyBlocks = true;
         consensus.enforce_BIP94 = false;
         consensus.fPowNoRetargeting = false;
@@ -542,6 +546,8 @@ public:
         consensus.powLimit = uint256{"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 2016 * 150; // one day
         consensus.nPowTargetSpacing = 150;
+        consensus.nLWMAHeight = 1;
+        consensus.nLWMAWindow = 18;
         consensus.fPowAllowMinDifficultyBlocks = true;
         consensus.enforce_BIP94 = opts.enforce_bip94;
         consensus.fPowNoRetargeting = true;

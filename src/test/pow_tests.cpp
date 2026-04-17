@@ -11,6 +11,8 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <vector>
+
 BOOST_FIXTURE_TEST_SUITE(pow_tests, BasicTestingSetup)
 
 /* Test calculation of next difficulty target with no constraints applying */
@@ -242,6 +244,60 @@ BOOST_AUTO_TEST_CASE(ChainParams_TESTNET4_sanity)
 BOOST_AUTO_TEST_CASE(ChainParams_SIGNET_sanity)
 {
     sanity_check_chainparams(*m_node.args, ChainType::SIGNET);
+}
+
+BOOST_AUTO_TEST_CASE(lwma_pre_activation_uses_legacy_path)
+{
+    const auto chainParams = CreateChainParams(*m_node.args, ChainType::MAIN);
+    const auto& consensus = chainParams->GetConsensus();
+    BOOST_CHECK_EQUAL(consensus.nLWMAHeight, 200001);
+
+    // Next block height 200000: still strictly before LWMA activation at 200001.
+    CBlockIndex last;
+    last.nHeight = 199999;
+    last.nTime = 1'000'000;
+    last.nBits = 0x1c387f6f;
+    last.pprev = nullptr;
+
+    const unsigned int got = GetNextWorkRequired(&last, nullptr, consensus);
+    BOOST_CHECK_EQUAL(got, last.nBits);
+}
+
+BOOST_AUTO_TEST_CASE(lwma_post_activation_matches_lwma_routine)
+{
+    const auto chainParams = CreateChainParams(*m_node.args, ChainType::MAIN);
+    const auto& consensus = chainParams->GetConsensus();
+    BOOST_CHECK_EQUAL(consensus.nLWMAHeight, 200001);
+    BOOST_CHECK_EQUAL(consensus.nLWMAWindow, 18);
+
+    // Tip height 200000 => next block is 200001 (LWMA). Build the minimal ancestor chain for the window.
+    const int span = consensus.nLWMAWindow + 1;
+    std::vector<CBlockIndex> blocks(span);
+    const int64_t base_time = 1'500'000;
+    for (int i = 0; i < span; i++) {
+        blocks[i].pprev = (i > 0) ? &blocks[i - 1] : nullptr;
+        blocks[i].nHeight = 200000 - consensus.nLWMAWindow + i;
+        blocks[i].nTime = base_time + static_cast<int64_t>(blocks[i].nHeight) * consensus.nPowTargetSpacing;
+        blocks[i].nBits = 0x1c387f6f;
+    }
+
+    const CBlockIndex* tip = &blocks.back();
+    BOOST_CHECK_EQUAL(tip->nHeight, 200000);
+
+    const unsigned int from_get = GetNextWorkRequired(tip, nullptr, consensus);
+    const unsigned int from_lwma = LwmaGetNextWorkRequired(tip, nullptr, consensus);
+    BOOST_CHECK_EQUAL(from_get, from_lwma);
+}
+
+BOOST_AUTO_TEST_CASE(lwma_permitted_difficulty_transition_after_activation)
+{
+    const auto chainParams = CreateChainParams(*m_node.args, ChainType::MAIN);
+    auto consensus = chainParams->GetConsensus();
+    consensus.fPowAllowMinDifficultyBlocks = false;
+    BOOST_CHECK_EQUAL(consensus.nLWMAHeight, 200001);
+
+    BOOST_CHECK(PermittedDifficultyTransition(consensus, 200001, 0x1d00ffff, 0x1e123456));
+    BOOST_CHECK(PermittedDifficultyTransition(consensus, 500'000, 0x1d00ffff, 0x20123456));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

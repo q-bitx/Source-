@@ -120,6 +120,10 @@ struct Params {
     int64_t nPowEmergencyWindow;
     /** Enable Emergency Difficulty Adjustment on mainnet/testnet */
     bool fPowEnableEmergencyDifficultyDrop;
+    /** LWMA-1 per-block difficulty adjustment activates at this height */
+    int nLWMAHeight{std::numeric_limits<int>::max()};
+    /** LWMA window size (number of prior inter-block intervals) */
+    int nLWMAWindow{18};
     std::chrono::seconds PowTargetSpacing() const
     {
         return std::chrono::seconds{nPowTargetSpacing};
