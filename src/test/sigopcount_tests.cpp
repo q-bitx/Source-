@@ -63,6 +63,16 @@ BOOST_AUTO_TEST_CASE(GetSigOpCount)
     CScript scriptSig2;
     scriptSig2 << OP_1 << ToByteVector(dummy) << ToByteVector(dummy) << Serialize(s2);
     BOOST_CHECK_EQUAL(p2sh.GetSigOpCount(scriptSig2), 3U);
+
+    // Legacy OP_CHECKSIG / OP_CHECKSIGVERIFY must count regardless of PQ sigop activation flag.
+    {
+        CScript checksig = CScript() << OP_CHECKSIG;
+        BOOST_CHECK_EQUAL(checksig.GetSigOpCount(true, false), 1U);
+        BOOST_CHECK_EQUAL(checksig.GetSigOpCount(true, true), 1U);
+        CScript checksigver = CScript() << OP_CHECKSIGVERIFY;
+        BOOST_CHECK_EQUAL(checksigver.GetSigOpCount(false, false), 1U);
+        BOOST_CHECK_EQUAL(checksigver.GetSigOpCount(false, true), 1U);
+    }
 }
 
 /**
@@ -209,6 +219,21 @@ BOOST_AUTO_TEST_CASE(GetTxSigOpCost)
         assert(GetTransactionSigOpCost(CTransaction(spendingTx), coins, flags) == 2);
         assert(GetTransactionSigOpCost(CTransaction(spendingTx), coins, flags & ~SCRIPT_VERIFY_WITNESS) == 0);
         assert(VerifyWithFlag(CTransaction(creationTx), spendingTx, flags) == SCRIPT_ERR_CHECKMULTISIGVERIFY);
+    }
+
+    // P2WSH with Dilithium multisig in witness script (GetTransactionSigOpCost -> CountWitnessSigOps -> GetSigOpCount)
+    {
+        CScript witnessScript = CScript() << 1 << ToByteVector(pubkey) << ToByteVector(pubkey) << 2 << OP_CHECKMULTISIGDILITHIUMVERIFY;
+        CScript scriptPubKey = GetScriptForDestination(WitnessV0ScriptHash(witnessScript));
+        CScript scriptSig = CScript();
+        CScriptWitness scriptWitness;
+        scriptWitness.stack.emplace_back(0);
+        scriptWitness.stack.emplace_back(0);
+        scriptWitness.stack.emplace_back(witnessScript.begin(), witnessScript.end());
+
+        BuildTxs(spendingTx, coins, creationTx, scriptPubKey, scriptSig, scriptWitness);
+        assert(GetTransactionSigOpCost(CTransaction(spendingTx), coins, flags, true) == 2);
+        assert(GetTransactionSigOpCost(CTransaction(spendingTx), coins, flags & ~SCRIPT_VERIFY_WITNESS, true) == 0);
     }
 
     // P2WSH nested in P2SH

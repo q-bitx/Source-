@@ -189,7 +189,7 @@ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_dat
  *
  * Note that only the non-witness portion of the transaction is checked here.
  */
-bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
+bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs, bool pq_sigops_active)
 {
     if (tx.IsCoinBase()) {
         return true; // Coinbases don't use vin normally
@@ -214,7 +214,7 @@ bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
             if (stack.empty())
                 return false;
             CScript subscript(stack.back().begin(), stack.back().end());
-            if (subscript.GetSigOpCount(true) > MAX_P2SH_SIGOPS) {
+            if (subscript.GetSigOpCount(true, pq_sigops_active) > MAX_P2SH_SIGOPS) {
                 return false;
             }
         }

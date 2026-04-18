@@ -28,6 +28,8 @@ add_subdirectory(
 add_executable(pq_tests
   main.cpp
   dilithium_tests.cpp
+  pq_sigopcount_tests.cpp
+  pq_sigop_pipeline_tests.cpp
   pq_verifyscript_tests.cpp
   pq_solver_policy_tests.cpp
   pq_sigpolicy_reject_tests.cpp
@@ -62,6 +64,22 @@ add_executable(pq_tests
   # misc
   ../../crypto/siphash.cpp
   ../../policy/feerate.cpp
+
+  ../../consensus/tx_verify.cpp
+  ../../coins.cpp
+  ../../chain.cpp
+  ../../util/moneystr.cpp
+  ../../logging.cpp
+  ../../random.cpp
+  ../../clientversion.cpp
+  ../../util/time.cpp
+  ../../util/threadnames.cpp
+  ../../sync.cpp
+  ../../util/fs.cpp
+  ../../util/fs_helpers.cpp
+  ../../util/syserror.cpp
+  ../../randomenv.cpp
+  ../../support/cleanse.cpp
 )
 
 target_sources(pq_tests PRIVATE
@@ -85,6 +103,7 @@ target_include_directories(pq_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../crypto
   ${CMAKE_CURRENT_SOURCE_DIR}/../../crypto/dilithium
   ${CMAKE_CURRENT_SOURCE_DIR}/../../secp256k1/include
+  ${PROJECT_BINARY_DIR}                            # bitcoin-build-config.h (top-level CMake binary dir)
 )
 
 # link to the actual secp256k1 target (name can differ)
@@ -156,6 +175,7 @@ target_include_directories(pq_multisig_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../crypto
   ${CMAKE_CURRENT_SOURCE_DIR}/../../crypto/dilithium
   ${CMAKE_CURRENT_SOURCE_DIR}/../../secp256k1/include
+  ${PROJECT_BINARY_DIR}                            # bitcoin-build-config.h (top-level CMake binary dir)
 )
 
 # link to secp256k1 (reuse same target as pq_tests)

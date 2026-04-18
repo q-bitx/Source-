@@ -34,7 +34,7 @@ namespace Consensus {
  * @return number of sigops this transaction's outputs will produce when spent
  * @see CTransaction::FetchInputs
  */
-unsigned int GetLegacySigOpCount(const CTransaction& tx);
+unsigned int GetLegacySigOpCount(const CTransaction& tx, bool pq_sigops_active = false);
 
 /**
  * Count ECDSA signature operations in pay-to-script-hash inputs.
@@ -43,16 +43,17 @@ unsigned int GetLegacySigOpCount(const CTransaction& tx);
  * @return maximum number of sigops required to validate this transaction's inputs
  * @see CTransaction::FetchInputs
  */
-unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& mapInputs);
+unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& mapInputs, bool pq_sigops_active = false);
 
 /**
  * Compute total signature operation cost of a transaction.
  * @param[in] tx     Transaction for which we are computing the cost
  * @param[in] inputs Map of previous transactions that have outputs we're spending
  * @param[in] flags Script verification flags
+ * @param[in] pq_sigops_active Whether PQ/Dilithium opcodes count toward sigops (post-buried-deployment).
  * @return Total signature operation cost of tx
  */
-int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, uint32_t flags);
+int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, uint32_t flags, bool pq_sigops_active = false);
 
 /**
  * Check if transaction is final and can be included in a block with the

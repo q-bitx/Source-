@@ -103,6 +103,7 @@ public:
         consensus.nPowEmergencyWindow = 12 * 25 * 25; //2h + 5 minutes (7500 sec)
         consensus.fPowEnableEmergencyDifficultyDrop = true;
         consensus.nLWMAHeight = 200001;
+        consensus.nPQSigopsHeight = 210000;
         consensus.nLWMAWindow = 18;
         consensus.fPowAllowMinDifficultyBlocks = false;
         consensus.enforce_BIP94 = false;
@@ -234,6 +235,7 @@ public:
         consensus.nPowTargetTimespan = 2016 * 150; // two weeks
         consensus.nPowTargetSpacing = 150;
         consensus.nLWMAHeight = 200001;
+        consensus.nPQSigopsHeight = 1;
         consensus.nLWMAWindow = 18;
         consensus.fPowAllowMinDifficultyBlocks = true;
         consensus.enforce_BIP94 = false;
@@ -325,6 +327,7 @@ public:
         consensus.BIP66Height = 1;
         consensus.CSVHeight = 1;
         consensus.SegwitHeight = 1;
+        consensus.nPQSigopsHeight = 1;
         consensus.MinBIP9WarningHeight = 0;
         consensus.powLimit = uint256{"00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 2016 * 150; // two weeks
@@ -462,6 +465,7 @@ public:
         consensus.BIP66Height = 1;
         consensus.CSVHeight = 1;
         consensus.SegwitHeight = 1;
+        consensus.nPQSigopsHeight = 1;
         consensus.nPowTargetTimespan = 2016 * 150; // two weeks
         consensus.nPowTargetSpacing = 150;
         consensus.fPowAllowMinDifficultyBlocks = false;
@@ -542,6 +546,7 @@ public:
         consensus.BIP66Height = 1;  // Always active unless overridden
         consensus.CSVHeight = 1;    // Always active unless overridden
         consensus.SegwitHeight = 0; // Always active unless overridden
+        consensus.nPQSigopsHeight = 1;
         consensus.MinBIP9WarningHeight = 0;
         consensus.powLimit = uint256{"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 2016 * 150; // one day
@@ -592,6 +597,9 @@ public:
                 break;
             case Consensus::BuriedDeployment::DEPLOYMENT_CSV:
                 consensus.CSVHeight = int{height};
+                break;
+            case Consensus::BuriedDeployment::DEPLOYMENT_PQ_SIGOPS:
+                consensus.nPQSigopsHeight = int{height};
                 break;
             }
         }

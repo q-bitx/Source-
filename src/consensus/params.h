@@ -26,8 +26,9 @@ enum BuriedDeployment : int16_t {
     DEPLOYMENT_DERSIG,
     DEPLOYMENT_CSV,
     DEPLOYMENT_SEGWIT,
+    DEPLOYMENT_PQ_SIGOPS,
 };
-constexpr bool ValidDeployment(BuriedDeployment dep) { return dep <= DEPLOYMENT_SEGWIT; }
+constexpr bool ValidDeployment(BuriedDeployment dep) { return dep <= DEPLOYMENT_PQ_SIGOPS; }
 
 enum DeploymentPos : uint16_t {
     DEPLOYMENT_TESTDUMMY,
@@ -122,6 +123,8 @@ struct Params {
     bool fPowEnableEmergencyDifficultyDrop;
     /** LWMA per-block difficulty adjustment activates at this height */
     int nLWMAHeight{std::numeric_limits<int>::max()};
+    /** PQ-aware signature operation counting (Dilithium / PQ opcodes) activates at this height */
+    int nPQSigopsHeight{std::numeric_limits<int>::max()};
     /** LWMA window size (number of prior inter-block intervals) */
     int nLWMAWindow{18};
     std::chrono::seconds PowTargetSpacing() const
@@ -154,6 +157,8 @@ struct Params {
             return CSVHeight;
         case DEPLOYMENT_SEGWIT:
             return SegwitHeight;
+        case DEPLOYMENT_PQ_SIGOPS:
+            return nPQSigopsHeight;
         } // no default case, so the compiler can warn about missing cases
         return std::numeric_limits<int>::max();
     }

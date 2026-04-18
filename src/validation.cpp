@@ -17,6 +17,7 @@
 #include <consensus/tx_check.h>
 #include <consensus/tx_verify.h>
 #include <consensus/validation.h>
+#include <deploymentstatus.h>
 #include <cuckoocache.h>
 #include <flatfile.h>
 #include <hash.h>
@@ -883,7 +884,9 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return false; // state filled in by CheckTxInputs
     }
 
-    if (m_pool.m_opts.require_standard && !AreInputsStandard(tx, m_view)) {
+    const bool pq_sigops_active{DeploymentActiveAfter(m_active_chainstate.m_chain.Tip(), m_active_chainstate.m_chainman, Consensus::DEPLOYMENT_PQ_SIGOPS)};
+
+    if (m_pool.m_opts.require_standard && !AreInputsStandard(tx, m_view, pq_sigops_active)) {
         return state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "bad-txns-nonstandard-inputs");
     }
 
@@ -892,7 +895,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(TxValidationResult::TX_WITNESS_MUTATED, "bad-witness-nonstandard");
     }
 
-    int64_t nSigOpsCost = GetTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS);
+    int64_t nSigOpsCost = GetTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS, pq_sigops_active);
 
     // Keep track of transactions that spend a coinbase, which we re-scan
     // during reorgs to ensure COINBASE_MATURITY is still met.
@@ -2625,6 +2628,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
 
     // Get the script flags for this block
     unsigned int flags{GetBlockScriptFlags(*pindex, m_chainman)};
+    const bool pq_sigops_active{DeploymentActiveAt(*pindex, m_chainman, Consensus::DEPLOYMENT_PQ_SIGOPS)};
 
     const auto time_2{SteadyClock::now()};
     m_chainman.time_forks += time_2 - time_1;
@@ -2692,7 +2696,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         // * legacy (always)
         // * p2sh (when P2SH enabled in flags and excludes coinbase)
         // * witness (when witness enabled in flags and excludes coinbase)
-        nSigOpsCost += GetTransactionSigOpCost(tx, view, flags);
+        nSigOpsCost += GetTransactionSigOpCost(tx, view, flags, pq_sigops_active);
         if (nSigOpsCost > MAX_BLOCK_SIGOPS_COST) {
             state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
             break;
