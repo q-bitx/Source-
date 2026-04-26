@@ -171,7 +171,7 @@ public:
  *  * DilithiumPubKeyDestination: TxoutType::DILITHIUM_PUBKEY (P2DPK), no corresponding address
  *  * DilithiumPKHash: TxoutType::DILITHIUM_PUBKEYHASH destination (P2DPKH address)
  *  * DilithiumScriptHash: TxoutType::DILITHIUM_SCRIPTHASH destination (P2DSH address)
- *  * DilithiumWitnessV0KeyHash: TxoutType::DILITHIUM_WITNESS_V0_KEYHASH destination (P2DWPKH address)
+ *  * DilithiumWitnessV0KeyHash: TxoutType::DILITHIUM_WITNESS_V0_KEYHASH destination encoded as OP_2 <20-byte-hash> (PQ witness keyhash)
  *  * DilithiumWitnessV0ScriptHash: TxoutType::DILITHIUM_WITNESS_V0_SCRIPTHASH destination (P2DWSH address)
  *  A CTxDestination is the internal data type encoded in a Q-BitX address
  */

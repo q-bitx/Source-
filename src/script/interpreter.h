@@ -143,6 +143,9 @@ enum : uint32_t {
     // Making unknown public key versions (in BIP 342 scripts) non-standard
     SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE = (1U << 20),
 
+    // Native Dilithium witness v0 and OP_CHECKSIG Dilithium-by-pubkey-size dispatch (height-gated in validation).
+    SCRIPT_VERIFY_PQ_WITNESS = (1U << 21),
+
     // Constants to point to the highest flag in use. Add new flags above this line.
     //
     SCRIPT_VERIFY_END_MARKER
@@ -260,6 +263,17 @@ public:
     return false;
 }
 
+    virtual bool CheckDilithiumSignature(const std::vector<unsigned char>& vchSig,
+                              const std::vector<unsigned char>& vchPubKey,
+                              const CScript& scriptCode,
+                              SigVersion sigversion,
+                              ScriptExecutionData& execdata,
+                              unsigned int flags,
+                              ScriptError* serror = nullptr) const
+{
+    return false;
+}
+
     virtual bool CheckSchnorrSignature(std::span<const unsigned char> sig, std::span<const unsigned char> pubkey, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror = nullptr) const
     {
         return false;
@@ -315,6 +329,13 @@ public:
                       SigVersion sigversion,
                       ScriptExecutionData& execdata,
                       ScriptError* serror = nullptr) const override;
+    bool CheckDilithiumSignature(const std::vector<unsigned char>& vchSig,
+                      const std::vector<unsigned char>& vchPubKey,
+                      const CScript& scriptCode,
+                      SigVersion sigversion,
+                      ScriptExecutionData& execdata,
+                      unsigned int flags,
+                      ScriptError* serror = nullptr) const override;
     bool CheckLockTime(const CScriptNum& nLockTime) const override;
     bool CheckSequence(const CScriptNum& nSequence) const override;
 };
@@ -338,6 +359,11 @@ public:
     bool CheckSchnorrSignature(std::span<const unsigned char> sig, std::span<const unsigned char> pubkey, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror = nullptr) const override
     {
         return m_checker.CheckSchnorrSignature(sig, pubkey, sigversion, execdata, serror);
+    }
+
+    bool CheckDilithiumSignature(const std::vector<unsigned char>& vchSig, const std::vector<unsigned char>& vchPubKey, const CScript& scriptCode, SigVersion sigversion, ScriptExecutionData& execdata, unsigned int flags, ScriptError* serror = nullptr) const override
+    {
+        return m_checker.CheckDilithiumSignature(vchSig, vchPubKey, scriptCode, sigversion, execdata, flags, serror);
     }
 
     bool CheckLockTime(const CScriptNum& nLockTime) const override

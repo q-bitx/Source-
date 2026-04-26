@@ -35,7 +35,7 @@ std::string GetTxnOutputType(TxoutType t)
     case TxoutType::DILITHIUM_PUBKEY: return "dilithium_pubkey";
     case TxoutType::DILITHIUM_PUBKEYHASH: return "dilithium_pubkeyhash";
     case TxoutType::DILITHIUM_SCRIPTHASH: return "dilithium_scripthash";
-    case TxoutType::DILITHIUM_WITNESS_V0_KEYHASH: return "dilithium_witness_v0_keyhash";
+    case TxoutType::DILITHIUM_WITNESS_V0_KEYHASH: return "dilithium_witness_v2_keyhash";
     case TxoutType::DILITHIUM_WITNESS_V0_SCRIPTHASH: return "dilithium_witness_v0_scripthash";
     case TxoutType::DILITHIUM_MULTISIG: return "dilithium_multisig";
     case TxoutType::WITNESS_UNKNOWN: return "witness_unknown";
@@ -290,6 +290,10 @@ TxoutType Solver(const CScript& scriptPubKey, std::vector<std::vector<unsigned c
         if (witnessversion == 0 && witnessprogram.size() == WITNESS_V0_KEYHASH_SIZE) {
             vSolutionsRet.push_back(std::move(witnessprogram));
             return TxoutType::WITNESS_V0_KEYHASH;
+        }
+        if (witnessversion == 2 && witnessprogram.size() == WITNESS_V0_KEYHASH_SIZE) {
+            vSolutionsRet.push_back(std::move(witnessprogram));
+            return TxoutType::DILITHIUM_WITNESS_V0_KEYHASH;
         }
         if (witnessversion == 0 && witnessprogram.size() == WITNESS_V0_SCRIPTHASH_SIZE) {
             vSolutionsRet.push_back(std::move(witnessprogram));

@@ -33,6 +33,7 @@
 #include <limits>
 #include <optional>
 #include <set>
+#include <variant>
 #include <vector>
 
 namespace wallet {
@@ -299,7 +300,12 @@ RPCHelpMan pqsendfrom()
         if (!tipHeightOpt.has_value()) {
             throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to get chain tip height");
         }
-        // tipHeight validated but not used directly - we use depth-based confirmations instead
+        const int next_height = *tipHeightOpt + 1;
+        const bool pq_witness_active = (next_height >= Consensus::PQ_WITNESS_ACTIVATION_HEIGHT);
+        if (!pq_witness_active && (std::holds_alternative<DilithiumWitnessV0KeyHash>(toDest) || std::holds_alternative<DilithiumWitnessV0ScriptHash>(toDest))) {
+            throw JSONRPCError(RPC_INVALID_REQUEST,
+                strprintf("PQ witness is not active until height %d", Consensus::PQ_WITNESS_ACTIVATION_HEIGHT));
+        }
 
         // Find UTXOs for the from_address scriptPubKey using wallet's listunspent-like functionality
         // For MVP, we'll use a simple approach: iterate wallet transactions and filter for PQ outputs

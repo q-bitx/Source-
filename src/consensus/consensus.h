@@ -18,6 +18,11 @@ static const int64_t MAX_BLOCK_SIGOPS_COST = 80000;
 /** Coinbase transaction outputs can only be spent after this number of new blocks (network rule) */
 static const int COINBASE_MATURITY = 100;
 
+namespace Consensus {
+/** Height at which native Dilithium witness v2 and OP_CHECKSIG Dilithium dispatch are enabled (SCRIPT_VERIFY_PQ_WITNESS). */
+static constexpr int PQ_WITNESS_ACTIVATION_HEIGHT = 230000;
+} // namespace Consensus
+
 static const int WITNESS_SCALE_FACTOR = 4;
 
 static const size_t MIN_TRANSACTION_WEIGHT = WITNESS_SCALE_FACTOR * 60; // 60 is the lower bound for the size of a valid serialized CTransaction

@@ -14,6 +14,7 @@
 #include <script/script.h>
 #include <script/signingprovider.h>
 #include <script/solver.h>
+#include <crypto/dilithium.h>
 #include <uint256.h>
 #include <util/translation.h>
 #include <util/vector.h>
@@ -56,6 +57,27 @@ bool MutableTransactionSignatureCreator::CreateSig(const SigningProvider& provid
     if (!key.Sign(hash, vchSig))
         return false;
     vchSig.push_back((unsigned char)hashtype);
+    return true;
+}
+
+bool MutableTransactionSignatureCreator::CreateDilithiumSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const DilithiumPKHash& keyid, const CScript& scriptCode, SigVersion sigversion) const
+{
+    assert(sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0);
+
+    std::vector<unsigned char> key_bytes;
+    if (!provider.GetDilithiumKeyByHash(keyid, key_bytes)) {
+        return false;
+    }
+
+    if (sigversion == SigVersion::WITNESS_V0 && !MoneyRange(amount)) return false;
+
+    const int hashtype = nHashType == SIGHASH_DEFAULT ? SIGHASH_ALL : nHashType;
+    const uint256 sighash = SignatureHash(scriptCode, m_txto, nIn, hashtype, amount, sigversion, m_txdata);
+    std::vector<unsigned char> msg_hash(sighash.begin(), sighash.end());
+    if (!PQ_Sign(vchSig, msg_hash, key_bytes)) {
+        return false;
+    }
+    vchSig.push_back(static_cast<unsigned char>(hashtype));
     return true;
 }
 
@@ -149,6 +171,17 @@ static bool CreateSig(const BaseSignatureCreator& creator, SignatureData& sigdat
     // Could not make signature or signature not found, add keyid to missing
     sigdata.missing_sigs.push_back(keyid);
     return false;
+}
+
+static bool GetDilithiumPubKey(const SigningProvider& provider, const DilithiumPKHash& address, CDilithiumPubKey& pubkey)
+{
+    return provider.GetDilithiumPubKey(address, pubkey);
+}
+
+static bool CreateDilithiumSig(const BaseSignatureCreator& creator, const SigningProvider& provider, std::vector<unsigned char>& sig_out, const CDilithiumPubKey& pubkey, const CScript& scriptcode, SigVersion sigversion)
+{
+    DilithiumPKHash keyid(pubkey);
+    return creator.CreateDilithiumSig(provider, sig_out, keyid, scriptcode, sigversion);
 }
 
 static bool CreateTaprootScriptSig(const BaseSignatureCreator& creator, SignatureData& sigdata, const SigningProvider& provider, std::vector<unsigned char>& sig_out, const XOnlyPubKey& pubkey, const uint256& leaf_hash, SigVersion sigversion)
@@ -480,11 +513,37 @@ static bool SignStep(const SigningProvider& provider, const BaseSignatureCreator
         }
         return ok;
     }
+    case TxoutType::DILITHIUM_PUBKEY:
+        if (!CreateDilithiumSig(creator, provider, sig, CDilithiumPubKey(vSolutions[0]), scriptPubKey, sigversion)) return false;
+        ret.push_back(std::move(sig));
+        return true;
+    case TxoutType::DILITHIUM_PUBKEYHASH: {
+        DilithiumPKHash keyID{uint160(vSolutions[0])};
+        CDilithiumPubKey pubkey;
+        if (!GetDilithiumPubKey(provider, keyID, pubkey)) {
+            return false;
+        }
+        if (!CreateDilithiumSig(creator, provider, sig, pubkey, scriptPubKey, sigversion)) return false;
+        ret.push_back(std::move(sig));
+        ret.push_back(ToByteVector(pubkey));
+        return true;
+    }
+    case TxoutType::DILITHIUM_SCRIPTHASH: {
+        DilithiumScriptHash scriptID{uint160(vSolutions[0])};
+        if (GetCScript(provider, sigdata, CScriptID{static_cast<uint160>(scriptID)}, scriptRet)) {
+            ret.emplace_back(scriptRet.begin(), scriptRet.end());
+            return true;
+        }
+        sigdata.missing_redeem_script = static_cast<uint160>(scriptID);
+        return false;
+    }
     case TxoutType::WITNESS_V0_KEYHASH:
+    case TxoutType::DILITHIUM_WITNESS_V0_KEYHASH:
         ret.push_back(vSolutions[0]);
         return true;
 
     case TxoutType::WITNESS_V0_SCRIPTHASH:
+    case TxoutType::DILITHIUM_WITNESS_V0_SCRIPTHASH:
         if (GetCScript(provider, sigdata, CScriptID{RIPEMD160(vSolutions[0])}, scriptRet)) {
             ret.emplace_back(scriptRet.begin(), scriptRet.end());
             return true;
@@ -540,23 +599,23 @@ bool ProduceSignature(const SigningProvider& provider, const BaseSignatureCreato
         P2SH = true;
     }
 
-    if (solved && whichType == TxoutType::WITNESS_V0_KEYHASH)
+    if (solved && (whichType == TxoutType::WITNESS_V0_KEYHASH || whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH))
     {
         CScript witnessscript;
-        witnessscript << OP_DUP << OP_HASH160 << ToByteVector(result[0]) << OP_EQUALVERIFY << OP_PQCHECKSIG;
+        witnessscript << OP_DUP << OP_HASH160 << ToByteVector(result[0]) << OP_EQUALVERIFY << OP_CHECKSIG;
         TxoutType subType;
         solved = solved && SignStep(provider, creator, witnessscript, result, subType, SigVersion::WITNESS_V0, sigdata);
         sigdata.scriptWitness.stack = result;
         sigdata.witness = true;
         result.clear();
     }
-    else if (solved && whichType == TxoutType::WITNESS_V0_SCRIPTHASH)
+    else if (solved && (whichType == TxoutType::WITNESS_V0_SCRIPTHASH || whichType == TxoutType::DILITHIUM_WITNESS_V0_SCRIPTHASH))
     {
         CScript witnessscript(result[0].begin(), result[0].end());
         sigdata.witness_script = witnessscript;
 
         TxoutType subType{TxoutType::NONSTANDARD};
-        solved = solved && SignStep(provider, creator, witnessscript, result, subType, SigVersion::WITNESS_V0, sigdata) && subType != TxoutType::SCRIPTHASH && subType != TxoutType::WITNESS_V0_SCRIPTHASH && subType != TxoutType::WITNESS_V0_KEYHASH;
+        solved = solved && SignStep(provider, creator, witnessscript, result, subType, SigVersion::WITNESS_V0, sigdata) && subType != TxoutType::SCRIPTHASH && subType != TxoutType::DILITHIUM_SCRIPTHASH && subType != TxoutType::WITNESS_V0_SCRIPTHASH && subType != TxoutType::WITNESS_V0_KEYHASH && subType != TxoutType::DILITHIUM_WITNESS_V0_SCRIPTHASH && subType != TxoutType::DILITHIUM_WITNESS_V0_KEYHASH;
 
         // If we couldn't find a solution with the legacy satisfier, try satisfying the script using Miniscript.
         // Note we need to check if the result stack is empty before, because it might be used even if the Script
@@ -589,7 +648,11 @@ bool ProduceSignature(const SigningProvider& provider, const BaseSignatureCreato
     sigdata.scriptSig = PushAll(result);
 
     // Test solution
-    sigdata.complete = solved && VerifyScript(sigdata.scriptSig, fromPubKey, &sigdata.scriptWitness, STANDARD_SCRIPT_VERIFY_FLAGS, creator.Checker());
+    unsigned int verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
+    if (sigdata.pq_witness_program_templates) {
+        verify_flags |= SCRIPT_VERIFY_PQ_WITNESS;
+    }
+    sigdata.complete = solved && VerifyScript(sigdata.scriptSig, fromPubKey, &sigdata.scriptWitness, verify_flags, creator.Checker());
     return sigdata.complete;
 }
 
@@ -701,6 +764,7 @@ void UpdateInput(CTxIn& input, const SignatureData& data)
 void SignatureData::MergeSignatureData(SignatureData sigdata)
 {
     if (complete) return;
+    pq_witness_program_templates = pq_witness_program_templates || sigdata.pq_witness_program_templates;
     if (sigdata.complete) {
         *this = std::move(sigdata);
         return;
@@ -752,6 +816,12 @@ public:
         vchSig[6 + m_r_len + m_s_len] = SIGHASH_ALL;
         return true;
     }
+    bool CreateDilithiumSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const DilithiumPKHash& keyid, const CScript& scriptCode, SigVersion sigversion) const override
+    {
+        vchSig.assign(DILITHIUM_SIGNATUREBYTES + 1, '\000');
+        vchSig.back() = SIGHASH_ALL;
+        return true;
+    }
     bool CreateSchnorrSig(const SigningProvider& provider, std::vector<unsigned char>& sig, const XOnlyPubKey& pubkey, const uint256* leaf_hash, const uint256* tweak, SigVersion sigversion) const override
     {
         sig.assign(64, '\000');
@@ -783,7 +853,7 @@ bool IsSegWitOutput(const SigningProvider& provider, const CScript& script)
     return false;
 }
 
-bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, const std::map<COutPoint, Coin>& coins, int nHashType, std::map<int, bilingual_str>& input_errors)
+bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, const std::map<COutPoint, Coin>& coins, int nHashType, std::map<int, bilingual_str>& input_errors, bool pq_witness_program_templates)
 {
     bool fHashSingle = ((nHashType & ~SIGHASH_ANYONECANPAY) == SIGHASH_SINGLE);
 
@@ -819,6 +889,7 @@ bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, 
         const CAmount& amount = coin->second.out.nValue;
 
         SignatureData sigdata = DataFromTransaction(mtx, i, coin->second.out);
+        sigdata.pq_witness_program_templates = pq_witness_program_templates;
         // Only sign SIGHASH_SINGLE if there's a corresponding output:
         if (!fHashSingle || (i < mtx.vout.size())) {
             ProduceSignature(*keystore, MutableTransactionSignatureCreator(mtx, i, amount, &txdata, nHashType), prevPubKey, sigdata);
@@ -833,7 +904,11 @@ bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, 
         }
 
         ScriptError serror = SCRIPT_ERR_OK;
-        if (!sigdata.complete && !VerifyScript(txin.scriptSig, prevPubKey, &txin.scriptWitness, STANDARD_SCRIPT_VERIFY_FLAGS, TransactionSignatureChecker(&txConst, i, amount, txdata, MissingDataBehavior::FAIL), &serror)) {
+        unsigned int verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
+        if (pq_witness_program_templates) {
+            verify_flags |= SCRIPT_VERIFY_PQ_WITNESS;
+        }
+        if (!sigdata.complete && !VerifyScript(txin.scriptSig, prevPubKey, &txin.scriptWitness, verify_flags, TransactionSignatureChecker(&txConst, i, amount, txdata, MissingDataBehavior::FAIL), &serror)) {
             if (serror == SCRIPT_ERR_INVALID_STACK_OPERATION) {
                 // Unable to sign input and verification failed (possible attempt to partially sign).
                 input_errors[i] = Untranslated("Unable to sign input, invalid stack size (possibly missing key)");

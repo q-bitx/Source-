@@ -2326,11 +2326,17 @@ bool CWallet::SetPQPrivateKey(const PQPrivateKey& key_in) {
 }
 bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const
 {
+    bool pq_witness_program_templates = false;
+    if (HaveChain()) {
+        if (const std::optional<int> h = chain().getHeight(); h.has_value() && *h + 1 >= Consensus::PQ_WITNESS_ACTIVATION_HEIGHT) {
+            pq_witness_program_templates = true;
+        }
+    }
     // Try to sign with all ScriptPubKeyMans
     for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
         // spk_man->SignTransaction will return true if the transaction is complete,
         // so we can exit early and return true if that happens
-        if (spk_man->SignTransaction(tx, coins, sighash, input_errors)) {
+        if (spk_man->SignTransaction(tx, coins, sighash, input_errors, pq_witness_program_templates)) {
             return true;
         }
     }

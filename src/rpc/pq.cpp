@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #ifdef ENABLE_WALLET
 using interfaces::FoundBlock;
 #endif
@@ -73,6 +74,18 @@ static RPCHelpMan pqkeypair()
             valtype pubkey, privkey;
             if (!PQ_GenerateKeypair(pubkey, privkey)) {
                 throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to generate Dilithium keypair");
+            }
+            if (pubkey.size() != DILITHIUM_PUBLICKEYBYTES) {
+                throw JSONRPCError(RPC_INTERNAL_ERROR,
+                    strprintf("Unexpected Dilithium public key size: %u bytes (expected %u)",
+                        static_cast<unsigned int>(pubkey.size()),
+                        static_cast<unsigned int>(DILITHIUM_PUBLICKEYBYTES)));
+            }
+            if (privkey.size() != DILITHIUM_SECRETKEYBYTES) {
+                throw JSONRPCError(RPC_INTERNAL_ERROR,
+                    strprintf("Unexpected Dilithium private key size: %u bytes (expected %u)",
+                        static_cast<unsigned int>(privkey.size()),
+                        static_cast<unsigned int>(DILITHIUM_SECRETKEYBYTES)));
             }
 
             UniValue result(UniValue::VOBJ);
@@ -383,6 +396,257 @@ static RPCHelpMan pqsetinputscript()
     };
 }
 
+/** Native PQ witness keyhash: consensus-visible OP_2 <20-byte program> (22-byte script). */
+static bool IsNativePQWitnessKeyhashScript(const CScript& script)
+{
+    return script.size() == 22 &&
+           static_cast<unsigned char>(script[0]) == static_cast<unsigned char>(OP_2) &&
+           static_cast<unsigned char>(script[1]) == 0x14;
+}
+
+struct PqSendtoSigned {
+    CTransactionRef tx;
+    std::string to_address;
+    CAmount amount;
+    CAmount fee;
+    CAmount change;
+    bool native_pq_witness;
+    std::string scriptSig_hex;
+    int64_t witness_items;
+    int64_t witness0_size;
+    int64_t witness1_size;
+};
+
+/** Parse vout for pqsendto / pqcreaterawspend (JSON number or string, e.g. from bitcoin-cli). */
+static uint32_t ParsePqSendtoVout(const UniValue& v)
+{
+    if (v.isNum()) {
+        const int64_t n = v.getInt<int64_t>();
+        if (n < 0 || n > std::numeric_limits<uint32_t>::max()) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "from_vout is out of range");
+        }
+        return static_cast<uint32_t>(n);
+    }
+    if (v.isStr()) {
+        uint32_t out;
+        if (!ParseUInt32(v.get_str(), &out)) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "from_vout must be a decimal integer");
+        }
+        return out;
+    }
+    throw JSONRPCError(RPC_TYPE_ERROR, "from_vout must be numeric");
+}
+
+/** Build and sign the same single-input PQ send transaction as pqsendto (no broadcast). */
+static PqSendtoSigned PqBuildSignedSendtoTx(const JSONRPCRequest& request)
+{
+    // Parse from_txid
+    std::string txidHex = request.params[0].get_str();
+    if (txidHex.length() != 64) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "from_txid must be 64 hex characters (32 bytes)");
+    }
+    auto txid_opt = Txid::FromHex(txidHex);
+    if (!txid_opt) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "from_txid must be 64 hex characters (32 bytes)");
+    }
+    const Txid txid = *txid_opt;
+
+    // Parse from_vout
+    const uint32_t vout = ParsePqSendtoVout(request.params[1]);
+
+    // Parse from_scriptcode_hex
+    std::string scriptCodeHex = request.params[2].get_str();
+    if (scriptCodeHex.empty() || !IsHex(scriptCodeHex)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "from_scriptcode_hex must be valid hex");
+    }
+    std::vector<unsigned char> scriptCodeBytes = ParseHex(scriptCodeHex);
+    CScript scriptCode(scriptCodeBytes.begin(), scriptCodeBytes.end());
+
+    // Parse from_pubkey_hex
+    std::string pubkeyHex = request.params[3].get_str();
+    if (pubkeyHex.empty() || !IsHex(pubkeyHex)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "from_pubkey_hex must be valid hex");
+    }
+    std::vector<unsigned char> pubkeyBytes = ParseHex(pubkeyHex);
+    if (pubkeyBytes.size() != CDilithiumPubKey::SIZE) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER,
+            strprintf("Public key must be exactly %u bytes", static_cast<unsigned int>(CDilithiumPubKey::SIZE)));
+    }
+
+    // Parse from_privkey_hex
+    std::vector<unsigned char> privkey = ParseHex(request.params[4].get_str());
+    if (privkey.size() != DILITHIUM_SECRETKEYBYTES) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER,
+            strprintf("Private key must be exactly %u bytes", DILITHIUM_SECRETKEYBYTES));
+    }
+
+    // Parse to_address
+    std::string toAddress = request.params[5].get_str();
+    CTxDestination dest = DecodeDestination(toAddress);
+    if (!IsValidDestination(dest)) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid destination address");
+    }
+    CScript outputScriptPubKey = GetScriptForDestination(dest);
+
+    // Parse amount
+    CAmount amount = AmountFromValue(request.params[6]);
+    if (amount <= 0) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Amount must be greater than 0");
+    }
+
+    // Parse fee (optional, default 0.0001)
+    CAmount fee = 0.0001 * COIN;
+    if (request.params.size() > 7 && !request.params[7].isNull()) {
+        fee = AmountFromValue(request.params[7]);
+    }
+    if (fee < 0) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Fee cannot be negative");
+    }
+
+    node::NodeContext& node = EnsureAnyNodeContext(request.context);
+    ChainstateManager& chainman = EnsureChainman(node);
+    const COutPoint outpoint(txid, vout);
+    CAmount inputAmount;
+    {
+        LOCK(cs_main);
+        Coin coin = chainman.ActiveChainstate().CoinsTip().AccessCoin(outpoint);
+        if (coin.IsSpent()) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "UTXO not found or already spent");
+        }
+        inputAmount = coin.out.nValue;
+    }
+
+    CAmount change = inputAmount - amount - fee;
+    if (change < 0) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER,
+            strprintf("Insufficient funds: input amount %s, required %s (amount %s + fee %s)",
+                FormatMoney(inputAmount),
+                FormatMoney(amount + fee),
+                FormatMoney(amount),
+                FormatMoney(fee)));
+    }
+
+    CMutableTransaction mtx;
+    constexpr uint32_t SEQ_RBF = 0xFFFFFFFD;
+    mtx.vin.emplace_back(outpoint, CScript{}, SEQ_RBF);
+    mtx.vout.emplace_back(amount, outputScriptPubKey);
+    if (change > 0) {
+        mtx.vout.emplace_back(change, scriptCode);
+    }
+
+    const bool native_pq_witness = IsNativePQWitnessKeyhashScript(scriptCode);
+    CScript witness_script;
+    if (native_pq_witness) {
+        const std::vector<unsigned char> program(scriptCode.begin() + 2, scriptCode.end());
+        witness_script << OP_DUP << OP_HASH160 << program << OP_EQUALVERIFY << OP_CHECKSIG;
+    }
+
+    const CTransaction tx_for_sighash(mtx);
+    int32_t nHashType = SIGHASH_ALL;
+    const uint256 sighash = native_pq_witness
+        ? SignatureHash(witness_script, tx_for_sighash, 0, nHashType, inputAmount, SigVersion::WITNESS_V0, nullptr)
+        : SignatureHash(scriptCode, tx_for_sighash, 0, nHashType, 0, SigVersion::BASE, nullptr);
+
+    valtype signature;
+    std::vector<unsigned char> msgHash(sighash.begin(), sighash.end());
+    if (!PQ_Sign(signature, msgHash, privkey)) {
+        throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to sign transaction");
+    }
+
+    valtype sigWithHashtype = signature;
+    sigWithHashtype.push_back(static_cast<unsigned char>(nHashType));
+
+    if (native_pq_witness) {
+        mtx.vin[0].scriptSig = CScript{};
+        mtx.vin[0].scriptWitness.stack.clear();
+        mtx.vin[0].scriptWitness.stack.push_back(sigWithHashtype);
+        mtx.vin[0].scriptWitness.stack.push_back(pubkeyBytes);
+    } else {
+        CScript scriptSig;
+        scriptSig << sigWithHashtype << pubkeyBytes;
+        mtx.vin[0].scriptSig = scriptSig;
+        mtx.vin[0].scriptWitness.stack.clear();
+    }
+
+    const std::string scriptSig_hex = HexStr(mtx.vin[0].scriptSig);
+    const int64_t witness_items = static_cast<int64_t>(mtx.vin[0].scriptWitness.stack.size());
+    const int64_t witness0_size =
+        mtx.vin[0].scriptWitness.stack.size() > 0 ? static_cast<int64_t>(mtx.vin[0].scriptWitness.stack[0].size()) : 0;
+    const int64_t witness1_size =
+        mtx.vin[0].scriptWitness.stack.size() > 1 ? static_cast<int64_t>(mtx.vin[0].scriptWitness.stack[1].size()) : 0;
+
+    PqSendtoSigned out;
+    out.tx = MakeTransactionRef(std::move(mtx));
+    out.to_address = std::move(toAddress);
+    out.amount = amount;
+    out.fee = fee;
+    out.change = change;
+    out.native_pq_witness = native_pq_witness;
+    out.scriptSig_hex = std::move(scriptSig_hex);
+    out.witness_items = witness_items;
+    out.witness0_size = witness0_size;
+    out.witness1_size = witness1_size;
+    return out;
+}
+
+static RPCHelpMan pqcreaterawspend()
+{
+    return RPCHelpMan{"pqcreaterawspend",
+        "\nBuild and sign a raw PQ (Dilithium) spend transaction without broadcasting (regtest only).\n"
+        "Same arguments and signing rules as pqsendto.\n",
+        {
+            {"from_txid", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The transaction ID (hex) of the UTXO being spent"},
+            {"from_vout", RPCArg::Type::NUM, RPCArg::Optional::NO, "The output index (vout) of the UTXO being spent",
+                RPCArgOptions{.skip_type_check = true, .type_str = {"", "numeric or string"}}},
+            {"from_scriptcode_hex", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The scriptCode hex (scriptPubKey of the UTXO)"},
+            {"from_pubkey_hex", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "Dilithium3 public key (hex)"},
+            {"from_privkey_hex", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "Dilithium3 private key (hex)"},
+            {"to_address", RPCArg::Type::STR, RPCArg::Optional::NO, "Destination address (base58 PQ address)"},
+            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "Amount to send (in QBX)"},
+            {"fee", RPCArg::Type::AMOUNT, RPCArg::Default{0.0001}, "Transaction fee (in QBX, default: 0.0001)"},
+        },
+        RPCResult{
+            RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::STR_HEX, "rawtx", "Signed transaction hex"},
+                {RPCResult::Type::STR_HEX, "txid", "Transaction id (non-witness)"},
+                {RPCResult::Type::STR_HEX, "wtxid", "Witness transaction id"},
+                {RPCResult::Type::BOOL, "native_pq_witness", "True if spending OP_2 <20> native PQ witness"},
+                {RPCResult::Type::STR_HEX, "scriptSig_hex", "Hex of input 0 scriptSig"},
+                {RPCResult::Type::NUM, "witness_items", "Number of witness stack items on input 0"},
+                {RPCResult::Type::NUM, "witness0_size", "Size in bytes of witness stack item 0"},
+                {RPCResult::Type::NUM, "witness1_size", "Size in bytes of witness stack item 1"},
+                {RPCResult::Type::NUM, "fee", "Transaction fee"},
+                {RPCResult::Type::NUM, "amount", "Amount sent to destination"},
+                {RPCResult::Type::NUM, "change", "Change to sender script (0 if none)"},
+            }
+        },
+        RPCExamples{
+            HelpExampleCli("pqcreaterawspend", "\"<txid>\" 0 \"<scriptcode_hex>\" \"<pubkey_hex>\" \"<privkey_hex>\" \"<address>\" 1.0")
+        },
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+        {
+            if (!Params().IsMockableChain()) {
+                throw std::runtime_error("pqcreaterawspend is for regression testing (-regtest mode) only");
+            }
+            const PqSendtoSigned s = PqBuildSignedSendtoTx(request);
+            UniValue result(UniValue::VOBJ);
+            result.pushKV("rawtx", EncodeHexTx(*s.tx));
+            result.pushKV("txid", s.tx->GetHash().GetHex());
+            result.pushKV("wtxid", s.tx->GetWitnessHash().GetHex());
+            result.pushKV("native_pq_witness", s.native_pq_witness);
+            result.pushKV("scriptSig_hex", s.scriptSig_hex);
+            result.pushKV("witness_items", s.witness_items);
+            result.pushKV("witness0_size", s.witness0_size);
+            result.pushKV("witness1_size", s.witness1_size);
+            result.pushKV("fee", ValueFromAmount(s.fee));
+            result.pushKV("amount", ValueFromAmount(s.amount));
+            result.pushKV("change", ValueFromAmount(s.change));
+            return result;
+        },
+    };
+}
+
 static RPCHelpMan pqsendto()
 {
     return RPCHelpMan{"pqsendto",
@@ -418,156 +682,35 @@ static RPCHelpMan pqsendto()
                 throw std::runtime_error("pqsendto is for regression testing (-regtest mode) only");
             }
 
-            // Parse from_txid
-            std::string txidHex = request.params[0].get_str();
-            if (txidHex.length() != 64) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "from_txid must be 64 hex characters (32 bytes)");
-            }
-            auto txid_opt = Txid::FromHex(txidHex);
-            if (!txid_opt) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "from_txid must be 64 hex characters (32 bytes)");
-            }
-            const Txid txid = *txid_opt;
-
-            // Parse from_vout
-            uint32_t vout = request.params[1].getInt<uint32_t>();
-
-            // Parse from_scriptcode_hex
-            std::string scriptCodeHex = request.params[2].get_str();
-            if (scriptCodeHex.empty() || !IsHex(scriptCodeHex)) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "from_scriptcode_hex must be valid hex");
-            }
-            std::vector<unsigned char> scriptCodeBytes = ParseHex(scriptCodeHex);
-            CScript scriptCode(scriptCodeBytes.begin(), scriptCodeBytes.end());
-
-            // Parse from_pubkey_hex
-            std::string pubkeyHex = request.params[3].get_str();
-            if (pubkeyHex.empty() || !IsHex(pubkeyHex)) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "from_pubkey_hex must be valid hex");
-            }
-            std::vector<unsigned char> pubkeyBytes = ParseHex(pubkeyHex);
-            if (pubkeyBytes.size() != CDilithiumPubKey::SIZE) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, 
-                    strprintf("Public key must be exactly %u bytes", static_cast<unsigned int>(CDilithiumPubKey::SIZE)));
-            }
-
-            // Parse from_privkey_hex
-            std::vector<unsigned char> privkey = ParseHex(request.params[4].get_str());
-            if (privkey.size() != DILITHIUM_SECRETKEYBYTES) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, 
-                    strprintf("Private key must be exactly %u bytes", DILITHIUM_SECRETKEYBYTES));
-            }
-
-            // Parse to_address
-            std::string toAddress = request.params[5].get_str();
-            CTxDestination dest = DecodeDestination(toAddress);
-            if (!IsValidDestination(dest)) {
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid destination address");
-            }
-            CScript outputScriptPubKey = GetScriptForDestination(dest);
-
-            // Parse amount
-            CAmount amount = AmountFromValue(request.params[6]);
-            if (amount <= 0) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "Amount must be greater than 0");
-            }
-
-            // Parse fee (optional, default 0.0001)
-            CAmount fee = 0.0001 * COIN;
-            if (request.params.size() > 7 && !request.params[7].isNull()) {
-                fee = AmountFromValue(request.params[7]);
-            }
-            if (fee < 0) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "Fee cannot be negative");
-            }
-
-            // Fetch UTXO amount from chainstate
+            PqSendtoSigned s = PqBuildSignedSendtoTx(request);
             node::NodeContext& node = EnsureAnyNodeContext(request.context);
-            ChainstateManager& chainman = EnsureChainman(node);
-            const COutPoint outpoint(txid, vout);
-            CAmount inputAmount;
-            {
-                LOCK(cs_main);
-                Coin coin = chainman.ActiveChainstate().CoinsTip().AccessCoin(outpoint);
-                if (coin.IsSpent()) {
-                    throw JSONRPCError(RPC_INVALID_PARAMETER, "UTXO not found or already spent");
-                }
-                inputAmount = coin.out.nValue;
-            }
-
-            // Calculate change
-            CAmount change = inputAmount - amount - fee;
-            if (change < 0) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, 
-                    strprintf("Insufficient funds: input amount %s, required %s (amount %s + fee %s)",
-                        FormatMoney(inputAmount),
-                        FormatMoney(amount + fee),
-                        FormatMoney(amount),
-                        FormatMoney(fee)));
-            }
-
-            // Build unsigned transaction
-            CMutableTransaction mtx;
-            // Use standard sequence for RBF-enabled transaction (MAX_BIP125_RBF_SEQUENCE = 0xFFFFFFFD)
-            constexpr uint32_t SEQ_RBF = 0xFFFFFFFD;
-            mtx.vin.emplace_back(outpoint, CScript{}, SEQ_RBF);
-            
-            // Add output to destination
-            mtx.vout.emplace_back(amount, outputScriptPubKey);
-
-            // Add change output if change > 0
-            if (change > 0) {
-                mtx.vout.emplace_back(change, scriptCode);
-            }
-
-            // Compute signature hash using provided scriptCode (after adding change output)
-            CTransaction tx(mtx);
-            int32_t nHashType = SIGHASH_ALL;
-            CAmount amountForSighash = 0; // BASE mode doesn't use amount
-            uint256 sighash = SignatureHash(scriptCode, tx, 0, nHashType, amountForSighash, SigVersion::BASE, nullptr);
-
-            // Sign the hash (reusing pqsign logic)
-            valtype signature;
-            std::vector<unsigned char> msgHash(sighash.begin(), sighash.end());
-            if (!PQ_Sign(signature, msgHash, privkey)) {
-                throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to sign transaction");
-            }
-
-            // Build scriptSig: <sig_with_hashtype> <pubkey>
-            // Signature must include hashtype byte (0x01 for SIGHASH_ALL)
-            valtype sigWithHashtype = signature;
-            sigWithHashtype.push_back(static_cast<unsigned char>(nHashType));
-
-            CScript scriptSig;
-            scriptSig << sigWithHashtype << pubkeyBytes;
-
-            // Set scriptSig in transaction
-            mtx.vin[0].scriptSig = scriptSig;
-
-            // Encode final transaction
-            CTransaction finalTx(mtx);
-            std::string rawtxHex = EncodeHexTx(finalTx);
-            uint256 txid_result = finalTx.GetHash();
-
-            // Broadcast transaction
-            CTransactionRef txRef = MakeTransactionRef(std::move(finalTx));
             std::string err_string;
-            const CAmount max_tx_fee = MAX_MONEY; // Accept any fee for regtest/dev
-            node::TransactionError err = node::BroadcastTransaction(node, txRef, err_string, max_tx_fee, /*relay=*/true, /*wait_callback=*/true);
+            const CAmount max_tx_fee = MAX_MONEY;
+            node::TransactionError err = node::BroadcastTransaction(node, s.tx, err_string, max_tx_fee, /*relay=*/true, /*wait_callback=*/true);
             if (err != node::TransactionError::OK) {
                 throw JSONRPCTransactionError(err, err_string);
             }
 
-            // Return result
+            const Txid txid_result = s.tx->GetHash();
+            const Wtxid wtxid_result = s.tx->GetWitnessHash();
+            const std::string rawtxHex = EncodeHexTx(*s.tx);
+
             UniValue result(UniValue::VOBJ);
             result.pushKV("txid", txid_result.GetHex());
             result.pushKV("rawtx", rawtxHex);
-            result.pushKV("to", toAddress);
-            result.pushKV("amount", ValueFromAmount(amount));
-            result.pushKV("fee", ValueFromAmount(fee));
-            if (change > 0) {
-                result.pushKV("change", ValueFromAmount(change));
+            result.pushKV("to", s.to_address);
+            result.pushKV("amount", ValueFromAmount(s.amount));
+            result.pushKV("fee", ValueFromAmount(s.fee));
+            if (s.change > 0) {
+                result.pushKV("change", ValueFromAmount(s.change));
             }
+            result.pushKV("debug_native_pq_witness", s.native_pq_witness);
+            result.pushKV("debug_scriptSig_hex", s.scriptSig_hex);
+            result.pushKV("debug_witness_items", s.witness_items);
+            result.pushKV("debug_witness0_size", s.witness0_size);
+            result.pushKV("debug_witness1_size", s.witness1_size);
+            result.pushKV("debug_txid", txid_result.GetHex());
+            result.pushKV("debug_wtxid", wtxid_result.GetHex());
             return result;
         },
     };
@@ -877,6 +1020,7 @@ void RegisterPQRPCCommands(CRPCTable& t)
         {"pq", &pqsign},
         {"pq", &pqgetdescriptor},
         {"pq", &pqsetinputscript},
+        {"pq", &pqcreaterawspend},
         {"pq", &pqsendto},
         {"pq", &pqcreatemultisig},
 #ifdef ENABLE_WALLET

@@ -211,7 +211,8 @@ public:
 
     CScript operator()(const DilithiumWitnessV0KeyHash& id) const
     {
-        return CScript() << OP_0 << ToByteVector(id);
+        // Consensus-visible discriminator for native PQ witness keyhash.
+        return CScript() << OP_2 << ToByteVector(id);
     }
 
     CScript operator()(const DilithiumWitnessV0ScriptHash& id) const

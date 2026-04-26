@@ -42,6 +42,7 @@
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <random.h>
+#include <script/interpreter.h>
 #include <script/opcodes.h>
 #include <script/pq_script.h>
 #include <script/script.h>
@@ -1239,7 +1240,10 @@ bool MemPoolAccept::PolicyScriptChecks(const ATMPArgs& args, Workspace& ws)
     const CTransaction& tx = *ws.m_ptx;
     TxValidationState& state = ws.m_state;
 
-    constexpr unsigned int scriptVerifyFlags = STANDARD_SCRIPT_VERIFY_FLAGS;
+    unsigned int scriptVerifyFlags = STANDARD_SCRIPT_VERIFY_FLAGS;
+    if (const CBlockIndex* tip{m_active_chainstate.m_chain.Tip()}; tip && tip->nHeight + 1 >= Consensus::PQ_WITNESS_ACTIVATION_HEIGHT) {
+        scriptVerifyFlags |= SCRIPT_VERIFY_PQ_WITNESS;
+    }
 
     // Check input scripts and signatures.
     // This is done last to help prevent CPU exhaustion denial-of-service attacks.
@@ -1283,7 +1287,11 @@ bool MemPoolAccept::ConsensusScriptChecks(const ATMPArgs& args, Workspace& ws)
     // There is a similar check in CreateNewBlock() to prevent creating
     // invalid blocks (using TestBlockValidity), however allowing such
     // transactions into the mempool can be exploited as a DoS attack.
-    unsigned int currentBlockScriptVerifyFlags{GetBlockScriptFlags(*m_active_chainstate.m_chain.Tip(), m_active_chainstate.m_chainman)};
+    const CBlockIndex* tip{m_active_chainstate.m_chain.Tip()};
+    unsigned int currentBlockScriptVerifyFlags{tip ? GetBlockScriptFlags(*tip, m_active_chainstate.m_chainman) : (SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_TAPROOT)};
+    if (tip && tip->nHeight + 1 >= Consensus::PQ_WITNESS_ACTIVATION_HEIGHT) {
+        currentBlockScriptVerifyFlags |= SCRIPT_VERIFY_PQ_WITNESS;
+    }
     if (!CheckInputsFromMempoolAndCache(tx, state, m_view, m_pool, currentBlockScriptVerifyFlags,
                                         ws.m_precomputed_txdata, m_active_chainstate.CoinsTip(), GetValidationCache())) {
         LogPrintf("BUG! PLEASE REPORT THIS! CheckInputScripts failed against latest-block but not STANDARD flags %s, %s\n", hash.ToString(), state.ToString());
@@ -2436,6 +2444,10 @@ static unsigned int GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
     // Enforce BIP147 NULLDUMMY (activated simultaneously with segwit)
     if (DeploymentActiveAt(block_index, chainman, Consensus::DEPLOYMENT_SEGWIT)) {
         flags |= SCRIPT_VERIFY_NULLDUMMY;
+    }
+
+    if (block_index.nHeight >= Consensus::PQ_WITNESS_ACTIVATION_HEIGHT) {
+        flags |= SCRIPT_VERIFY_PQ_WITNESS;
     }
 
     return flags;
