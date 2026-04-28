@@ -654,7 +654,7 @@ SigningResult LegacyScriptPubKeyMan::SignMessage(const std::string& message, con
     return SigningResult::SIGNING_FAILED;
 }
 
-std::optional<PSBTError> LegacyScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbtx, const PrecomputedTransactionData& txdata, int sighash_type, bool sign, bool bip32derivs, int* n_signed, bool finalize) const
+std::optional<PSBTError> LegacyScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbtx, const PrecomputedTransactionData& txdata, int sighash_type, bool sign, bool bip32derivs, int* n_signed, bool finalize, bool pq_witness_program_templates) const
 {
     if (n_signed) {
         *n_signed = 0;
@@ -681,7 +681,7 @@ std::optional<PSBTError> LegacyScriptPubKeyMan::FillPSBT(PartiallySignedTransact
             // There's no UTXO so we can just skip this now
             continue;
         }
-        SignPSBTInput(HidingSigningProvider(this, !sign, !bip32derivs), psbtx, i, &txdata, sighash_type, nullptr, finalize);
+        SignPSBTInput(HidingSigningProvider(this, !sign, !bip32derivs), psbtx, i, &txdata, sighash_type, nullptr, finalize, pq_witness_program_templates);
 
         bool signed_one = PSBTInputSigned(input);
         if (n_signed && (signed_one || !sign)) {
@@ -2807,7 +2807,7 @@ SigningResult DescriptorScriptPubKeyMan::SignMessage(const std::string& message,
     return SigningResult::OK;
 }
 
-std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbtx, const PrecomputedTransactionData& txdata, int sighash_type, bool sign, bool bip32derivs, int* n_signed, bool finalize) const
+std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbtx, const PrecomputedTransactionData& txdata, int sighash_type, bool sign, bool bip32derivs, int* n_signed, bool finalize, bool pq_witness_program_templates) const
 {
     if (n_signed) {
         *n_signed = 0;
@@ -2882,7 +2882,7 @@ std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTran
             }
         }
 
-        SignPSBTInput(HidingSigningProvider(keys.get(), /*hide_secret=*/!sign, /*hide_origin=*/!bip32derivs), psbtx, i, &txdata, sighash_type, nullptr, finalize);
+        SignPSBTInput(HidingSigningProvider(keys.get(), /*hide_secret=*/!sign, /*hide_origin=*/!bip32derivs), psbtx, i, &txdata, sighash_type, nullptr, finalize, pq_witness_program_templates);
 
         bool signed_one = PSBTInputSigned(input);
         if (n_signed && (signed_one || !sign)) {

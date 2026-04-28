@@ -2,11 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <addresstype.h>
 #include <coins.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/tx_verify.h>
+#include <crypto/sha256.h>
 #include <policy/policy.h>
 #include <script/script.h>
 
@@ -68,7 +68,9 @@ BOOST_AUTO_TEST_CASE(gettransactionsigopcost_counts_dilithium_paths)
     // B) Accurate OP_N counting for OP_CHECKMULTISIGDILITHIUM in P2WSH witness script.
     {
         CScript witness_script = CScript() << OP_2 << OP_3 << OP_CHECKMULTISIGDILITHIUM;
-        CScript script_pub_key = GetScriptForDestination(WitnessV0ScriptHash(witness_script));
+        uint256 witness_program;
+        CSHA256().Write(witness_script.data(), witness_script.size()).Finalize(witness_program.begin());
+        CScript script_pub_key = CScript() << OP_0 << ToByteVector(witness_program);
         CScriptWitness witness;
         witness.stack.emplace_back(0);
         witness.stack.emplace_back(0);

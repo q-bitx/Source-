@@ -372,7 +372,7 @@ PrecomputedTransactionData PrecomputePSBTData(const PartiallySignedTransaction& 
     return txdata;
 }
 
-bool SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& psbt, int index, const PrecomputedTransactionData* txdata, int sighash,  SignatureData* out_sigdata, bool finalize)
+bool SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& psbt, int index, const PrecomputedTransactionData* txdata, int sighash, SignatureData* out_sigdata, bool finalize, bool pq_witness_program_templates)
 {
     PSBTInput& input = psbt.inputs.at(index);
     const CMutableTransaction& tx = *psbt.tx;
@@ -384,6 +384,7 @@ bool SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& 
     // Fill SignatureData with input info
     SignatureData sigdata;
     input.FillSignatureData(sigdata);
+    sigdata.pq_witness_program_templates = sigdata.pq_witness_program_templates || pq_witness_program_templates;
 
     // Get UTXO
     bool require_witness_sig = false;
@@ -440,6 +441,7 @@ bool SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& 
         out_sigdata->missing_sigs = sigdata.missing_sigs;
         out_sigdata->missing_redeem_script = sigdata.missing_redeem_script;
         out_sigdata->missing_witness_script = sigdata.missing_witness_script;
+        out_sigdata->pq_witness_program_templates = sigdata.pq_witness_program_templates;
     }
 
     return sig_complete;

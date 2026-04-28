@@ -150,7 +150,7 @@ static constexpr decltype(CTransaction::version) TX_MAX_STANDARD_VERSION{3};
 * Check for standard transaction types
 * @return True if all outputs (scriptPubKeys) use only standard transaction forms
 */
-bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason);
+bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason, int witness_discount_scale = WITNESS_SCALE_FACTOR);
 /**
 * Check for standard transaction types
 * @param[in] mapInputs       Map of previous transactions that have outputs we're spending
@@ -167,9 +167,21 @@ bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs,
 bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs);
 
 /** Compute the virtual transaction size (weight reinterpreted as bytes). */
-int64_t GetVirtualTransactionSize(int64_t nWeight, int64_t nSigOpCost, unsigned int bytes_per_sigop);
-int64_t GetVirtualTransactionSize(const CTransaction& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop);
-int64_t GetVirtualTransactionInputSize(const CTxIn& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop);
+int64_t GetVirtualTransactionSize(int64_t nWeight, int64_t nSigOpCost, unsigned int bytes_per_sigop, int witness_discount_scale);
+inline int64_t GetVirtualTransactionSize(int64_t nWeight, int64_t nSigOpCost, unsigned int bytes_per_sigop)
+{
+    return GetVirtualTransactionSize(nWeight, nSigOpCost, bytes_per_sigop, WITNESS_SCALE_FACTOR);
+}
+int64_t GetVirtualTransactionSize(const CTransaction& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop, int witness_discount_scale);
+inline int64_t GetVirtualTransactionSize(const CTransaction& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop)
+{
+    return GetVirtualTransactionSize(tx, nSigOpCost, bytes_per_sigop, WITNESS_SCALE_FACTOR);
+}
+int64_t GetVirtualTransactionInputSize(const CTxIn& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop, int witness_discount_scale);
+inline int64_t GetVirtualTransactionInputSize(const CTxIn& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop)
+{
+    return GetVirtualTransactionInputSize(tx, nSigOpCost, bytes_per_sigop, WITNESS_SCALE_FACTOR);
+}
 
 static inline int64_t GetVirtualTransactionSize(const CTransaction& tx)
 {

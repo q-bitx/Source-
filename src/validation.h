@@ -796,7 +796,8 @@ private:
      */
     void MaybeUpdateMempoolForReorg(
         DisconnectedBlockTransactions& disconnectpool,
-        bool fAddToMempool) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
+        bool fAddToMempool,
+        const CBlockIndex* old_tip) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
 
     /** Check warning conditions and do some notifications on new chain tip set. */
     void UpdateTip(const CBlockIndex* pindexNew)

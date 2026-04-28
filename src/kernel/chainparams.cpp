@@ -97,6 +97,8 @@ public:
         consensus.CSVHeight = 419328; // 000000000000000004a1b34462cb8aeebd5799177f7a29cf28f2d1961716b5b5
         consensus.SegwitHeight = 481824; // 0000000000000000001c8018d9cb3b742ef25114f27563e3fc4a1902167f9893
         consensus.MinBIP9WarningHeight = 483840; // segwit activation height + miner confirmation window
+        // PQ native witness + BTQ-style k=16 weight discount (hard fork)
+        consensus.nPQWitnessHeight = 230000;
         consensus.powLimit = uint256{"00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 10 * 60;
@@ -202,6 +204,7 @@ public:
         consensus.CSVHeight = 770112; // 00000000025e930139bac5c6c31a403776da130831ab85be56578f3fa75369bb
         consensus.SegwitHeight = 834624; // 00000000002b980fcd729daaa248fd9316a5200e9b367f4ff2c42453e84201ca
         consensus.MinBIP9WarningHeight = 836640; // segwit activation height + miner confirmation window
+        consensus.nPQWitnessHeight = 230000;
         consensus.powLimit = uint256{"00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 10 * 60;
@@ -292,6 +295,8 @@ public:
         consensus.CSVHeight = 1;
         consensus.SegwitHeight = 1;
         consensus.MinBIP9WarningHeight = 0;
+        // Same fork height as mainnet/testnet for Q-BitX public test networks
+        consensus.nPQWitnessHeight = 230000;
         consensus.powLimit = uint256{"00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 10 * 60;
@@ -423,6 +428,7 @@ public:
         consensus.BIP66Height = 1;
         consensus.CSVHeight = 1;
         consensus.SegwitHeight = 1;
+        consensus.nPQWitnessHeight = 230000;
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 10 * 60;
         consensus.fPowAllowMinDifficultyBlocks = false;
@@ -499,6 +505,8 @@ public:
         consensus.CSVHeight = 1;    // Always active unless overridden
         consensus.SegwitHeight = 0; // Always active unless overridden
         consensus.nPQSigopsHeight = 1;
+        // Low default for regtest activation/boundary tests; override via -testactivationheight=pq_witness@HEIGHT
+        consensus.nPQWitnessHeight = 120;
         consensus.MinBIP9WarningHeight = 0;
         consensus.powLimit = uint256{"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 24 * 60 * 60; // one day
@@ -550,6 +558,9 @@ public:
                 break;
             case Consensus::BuriedDeployment::DEPLOYMENT_PQ_SIGOPS:
                 consensus.nPQSigopsHeight = int{height};
+                break;
+            case Consensus::BuriedDeployment::DEPLOYMENT_PQ_WITNESS:
+                consensus.nPQWitnessHeight = int{height};
                 break;
             }
         }

@@ -176,13 +176,14 @@ UniValue blockheaderToJSON(const CBlockIndex& tip, const CBlockIndex& blockindex
     return result;
 }
 
-UniValue blockToJSON(BlockManager& blockman, const CBlock& block, const CBlockIndex& tip, const CBlockIndex& blockindex, TxVerbosity verbosity, const uint256 pow_limit)
+UniValue blockToJSON(BlockManager& blockman, const CBlock& block, const CBlockIndex& tip, const CBlockIndex& blockindex, TxVerbosity verbosity, const Consensus::Params& consensus)
 {
-    UniValue result = blockheaderToJSON(tip, blockindex, pow_limit);
+    UniValue result = blockheaderToJSON(tip, blockindex, consensus.powLimit);
 
     result.pushKV("strippedsize", (int)::GetSerializeSize(TX_NO_WITNESS(block)));
     result.pushKV("size", (int)::GetSerializeSize(TX_WITH_WITNESS(block)));
-    result.pushKV("weight", (int)::GetBlockWeight(block));
+    const int json_wscale{GetWitnessDiscountScale(consensus, blockindex.nHeight)};
+    result.pushKV("weight", (int)::GetBlockWeightWithScale(block, json_wscale));
     UniValue txs(UniValue::VARR);
 
     switch (verbosity) {
@@ -832,7 +833,7 @@ static RPCHelpMan getblock()
         tx_verbosity = TxVerbosity::SHOW_DETAILS_AND_PREVOUT;
     }
 
-    return blockToJSON(chainman.m_blockman, block, *tip, *pblockindex, tx_verbosity, chainman.GetConsensus().powLimit);
+    return blockToJSON(chainman.m_blockman, block, *tip, *pblockindex, tx_verbosity, chainman.GetConsensus());
 },
     };
 }
@@ -1434,6 +1435,7 @@ UniValue DeploymentInfo(const CBlockIndex* blockindex, const ChainstateManager& 
     SoftForkDescPushBack(blockindex, softforks, chainman, Consensus::DEPLOYMENT_CSV);
     SoftForkDescPushBack(blockindex, softforks, chainman, Consensus::DEPLOYMENT_SEGWIT);
     SoftForkDescPushBack(blockindex, softforks, chainman, Consensus::DEPLOYMENT_PQ_SIGOPS);
+    SoftForkDescPushBack(blockindex, softforks, chainman, Consensus::DEPLOYMENT_PQ_WITNESS);
     SoftForkDescPushBack(blockindex, softforks, chainman, Consensus::DEPLOYMENT_TESTDUMMY);
     SoftForkDescPushBack(blockindex, softforks, chainman, Consensus::DEPLOYMENT_TAPROOT);
     return softforks;
@@ -1942,6 +1944,7 @@ static RPCHelpMan getblockstats()
 {
     ChainstateManager& chainman = EnsureAnyChainman(request.context);
     const CBlockIndex& pindex{*CHECK_NONFATAL(ParseHashOrHeight(request.params[0], chainman))};
+    const int stats_wscale{GetWitnessDiscountScale(chainman.GetConsensus(), pindex.nHeight)};
 
     std::set<std::string> stats;
     if (!request.params[1].isNull()) {
@@ -2033,7 +2036,7 @@ static RPCHelpMan getblockstats()
 
         int64_t weight = 0;
         if (do_calculate_weight) {
-            weight = GetTransactionWeight(*tx);
+            weight = GetTransactionWeightWithScale(*tx, stats_wscale);
             total_weight += weight;
         }
 
@@ -2065,7 +2068,7 @@ static RPCHelpMan getblockstats()
             totalfee += txfee;
 
             // New feerate uses satoshis per virtual byte instead of per serialized byte
-            CAmount feerate = weight ? (txfee * WITNESS_SCALE_FACTOR) / weight : 0;
+            CAmount feerate = weight ? (txfee * stats_wscale) / weight : 0;
             if (do_feerate_percentiles) {
                 feerate_array.emplace_back(feerate, weight);
             }
@@ -2084,7 +2087,7 @@ static RPCHelpMan getblockstats()
 
     UniValue ret_all(UniValue::VOBJ);
     ret_all.pushKV("avgfee", (block.vtx.size() > 1) ? totalfee / (block.vtx.size() - 1) : 0);
-    ret_all.pushKV("avgfeerate", total_weight ? (totalfee * WITNESS_SCALE_FACTOR) / total_weight : 0); // Unit: sat/vbyte
+    ret_all.pushKV("avgfeerate", total_weight ? (totalfee * stats_wscale) / total_weight : 0); // Unit: sat/vbyte
     ret_all.pushKV("avgtxsize", (block.vtx.size() > 1) ? total_size / (block.vtx.size() - 1) : 0);
     ret_all.pushKV("blockhash", pindex.GetBlockHash().GetHex());
     ret_all.pushKV("feerate_percentiles", std::move(feerates_res));

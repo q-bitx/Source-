@@ -27,8 +27,10 @@ enum BuriedDeployment : int16_t {
     DEPLOYMENT_CSV,
     DEPLOYMENT_SEGWIT,
     DEPLOYMENT_PQ_SIGOPS,
+    /** PQ native witness (SCRIPT_VERIFY_PQ_WITNESS) + k=16 block weight discount; height stored in nPQWitnessHeight */
+    DEPLOYMENT_PQ_WITNESS,
 };
-constexpr bool ValidDeployment(BuriedDeployment dep) { return dep <= DEPLOYMENT_PQ_SIGOPS; }
+constexpr bool ValidDeployment(BuriedDeployment dep) { return dep <= DEPLOYMENT_PQ_WITNESS; }
 
 enum DeploymentPos : uint16_t {
     DEPLOYMENT_TESTDUMMY,
@@ -125,6 +127,8 @@ struct Params {
     int nLWMAHeight{std::numeric_limits<int>::max()};
     /** PQ-aware signature operation counting (Dilithium / PQ opcodes) activates at this height */
     int nPQSigopsHeight{std::numeric_limits<int>::max()};
+    /** Native Dilithium PQ witness (SCRIPT_VERIFY_PQ_WITNESS) and BTQ-style k=16 witness discount for block/tx weight */
+    int nPQWitnessHeight{std::numeric_limits<int>::max()};
     /** LWMA window size (number of prior inter-block intervals) */
     int nLWMAWindow{18};
     std::chrono::seconds PowTargetSpacing() const
@@ -159,10 +163,18 @@ struct Params {
             return SegwitHeight;
         case DEPLOYMENT_PQ_SIGOPS:
             return nPQSigopsHeight;
+        case DEPLOYMENT_PQ_WITNESS:
+            return nPQWitnessHeight;
         } // no default case, so the compiler can warn about missing cases
         return std::numeric_limits<int>::max();
     }
 };
+
+/** True if the block at \p height is subject to PQ witness script rules and k=16 weight accounting. */
+inline bool IsPQWitnessEnabled(const Params& params, int height)
+{
+    return height >= params.nPQWitnessHeight;
+}
 
 } // namespace Consensus
 

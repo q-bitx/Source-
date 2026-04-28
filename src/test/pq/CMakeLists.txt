@@ -58,18 +58,22 @@ add_executable(pq_tests
   ../../script/solver.cpp
   ../../script/standard.cpp
   ../../uint256.cpp
+  ../../arith_uint256.cpp
 
   # helpers needed by standard.cpp (Encode/DecodeBase58Check)
   ../../base58.cpp
 
   # misc
   ../../crypto/siphash.cpp
+  ../../crypto/chacha20.cpp
   ../../policy/feerate.cpp
 
   ../../consensus/tx_verify.cpp
   ../../coins.cpp
   ../../chain.cpp
   ../../util/moneystr.cpp
+  ../../util/check.cpp
+  ../../util/hasher.cpp
   ../../logging.cpp
   ../../random.cpp
   ../../clientversion.cpp
@@ -81,6 +85,7 @@ add_executable(pq_tests
   ../../util/syserror.cpp
   ../../randomenv.cpp
   ../../support/cleanse.cpp
+  ../../support/lockedpool.cpp
 )
 
 target_sources(pq_tests PRIVATE

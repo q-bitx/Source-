@@ -8,6 +8,7 @@
 
 #include <string>
 #include <consensus/consensus.h>
+#include <consensus/params.h>
 #include <primitives/transaction.h>
 #include <primitives/block.h>
 
@@ -125,22 +126,46 @@ public:
 class TxValidationState : public ValidationState<TxValidationResult> {};
 class BlockValidationState : public ValidationState<BlockValidationResult> {};
 
-// These implement the weight = (stripped_size * 4) + witness_size formula,
-// using only serialization with and without witness data. As witness_size
-// is equal to total_size - stripped_size, this formula is identical to:
-// weight = (stripped_size * 3) + total_size.
+// BIP141-style weight with configurable witness discount k:
+// weight = stripped_size * (k - 1) + total_size (with witness).
+static inline int32_t GetTransactionWeightWithScale(const CTransaction& tx, int witness_discount_scale)
+{
+    return static_cast<int32_t>(::GetSerializeSize(TX_NO_WITNESS(tx)) * (witness_discount_scale - 1) + ::GetSerializeSize(TX_WITH_WITNESS(tx)));
+}
+static inline int64_t GetBlockWeightWithScale(const CBlock& block, int witness_discount_scale)
+{
+    return static_cast<int64_t>(::GetSerializeSize(TX_NO_WITNESS(block)) * (witness_discount_scale - 1) + ::GetSerializeSize(TX_WITH_WITNESS(block)));
+}
+static inline int64_t GetTransactionInputWeightWithScale(const CTxIn& txin, int witness_discount_scale)
+{
+    // scriptWitness size is added here because witnesses and txins are split up in segwit serialization.
+    return static_cast<int64_t>(::GetSerializeSize(TX_NO_WITNESS(txin)) * (witness_discount_scale - 1) + ::GetSerializeSize(TX_WITH_WITNESS(txin)) + ::GetSerializeSize(txin.scriptWitness.stack));
+}
+
+/** k=16 after PQ witness activation (chain height), else legacy k=4. */
+static inline int GetWitnessDiscountScale(const Consensus::Params& params, int block_height)
+{
+    return Consensus::IsPQWitnessEnabled(params, block_height) ? PQ_WITNESS_SCALE_FACTOR : WITNESS_SCALE_FACTOR;
+}
+
+/** True when next-block witness discount scale changes because tip crossed PQ witness activation height. */
+static inline bool IsWitnessDiscountScaleChangedAcrossTips(const Consensus::Params& params, int old_tip_height, int new_tip_height)
+{
+    return GetWitnessDiscountScale(params, old_tip_height + 1) != GetWitnessDiscountScale(params, new_tip_height + 1);
+}
+
+// Legacy scale-4 helpers (e.g. tests, contexts without a chain height).
 static inline int32_t GetTransactionWeight(const CTransaction& tx)
 {
-    return ::GetSerializeSize(TX_NO_WITNESS(tx)) * (WITNESS_SCALE_FACTOR - 1) + ::GetSerializeSize(TX_WITH_WITNESS(tx));
+    return GetTransactionWeightWithScale(tx, WITNESS_SCALE_FACTOR);
 }
 static inline int64_t GetBlockWeight(const CBlock& block)
 {
-    return ::GetSerializeSize(TX_NO_WITNESS(block)) * (WITNESS_SCALE_FACTOR - 1) + ::GetSerializeSize(TX_WITH_WITNESS(block));
+    return GetBlockWeightWithScale(block, WITNESS_SCALE_FACTOR);
 }
 static inline int64_t GetTransactionInputWeight(const CTxIn& txin)
 {
-    // scriptWitness size is added here because witnesses and txins are split up in segwit serialization.
-    return ::GetSerializeSize(TX_NO_WITNESS(txin)) * (WITNESS_SCALE_FACTOR - 1) + ::GetSerializeSize(TX_WITH_WITNESS(txin)) + ::GetSerializeSize(txin.scriptWitness.stack);
+    return GetTransactionInputWeightWithScale(txin, WITNESS_SCALE_FACTOR);
 }
 
 /** Compute at which vout of the block's coinbase transaction the witness commitment occurs, or -1 if not found */

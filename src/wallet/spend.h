@@ -6,6 +6,7 @@
 #define BITCOIN_WALLET_SPEND_H
 
 #include <consensus/amount.h>
+#include <consensus/consensus.h>
 #include <policy/fees.h> // for FeeCalculation
 #include <util/result.h>
 #include <wallet/coinselection.h>
@@ -17,8 +18,8 @@
 namespace wallet {
 /** Get the marginal bytes if spending the specified output from this transaction.
  * Use CoinControl to determine whether to expect signature grinding when calculating the size of the input spend. */
-int CalculateMaximumSignedInputSize(const CTxOut& txout, const CWallet* pwallet, const CCoinControl* coin_control);
-int CalculateMaximumSignedInputSize(const CTxOut& txout, const COutPoint outpoint, const SigningProvider* pwallet, bool can_grind_r, const CCoinControl* coin_control);
+int CalculateMaximumSignedInputSize(const CTxOut& txout, const CWallet* pwallet, const CCoinControl* coin_control, int witness_discount_scale = WITNESS_SCALE_FACTOR);
+int CalculateMaximumSignedInputSize(const CTxOut& txout, const COutPoint outpoint, const SigningProvider* pwallet, bool can_grind_r, const CCoinControl* coin_control, int witness_discount_scale = WITNESS_SCALE_FACTOR);
 struct TxSize {
     int64_t vsize{-1};
     int64_t weight{-1};
@@ -26,8 +27,8 @@ struct TxSize {
 
 /** Calculate the size of the transaction using CoinControl to determine
  * whether to expect signature grinding when calculating the size of the input spend. */
-TxSize CalculateMaximumSignedTxSize(const CTransaction& tx, const CWallet* wallet, const std::vector<CTxOut>& txouts, const CCoinControl* coin_control = nullptr);
-TxSize CalculateMaximumSignedTxSize(const CTransaction& tx, const CWallet* wallet, const CCoinControl* coin_control = nullptr) EXCLUSIVE_LOCKS_REQUIRED(wallet->cs_wallet);
+TxSize CalculateMaximumSignedTxSize(const CTransaction& tx, const CWallet* wallet, const std::vector<CTxOut>& txouts, const CCoinControl* coin_control = nullptr, int witness_discount_scale = WITNESS_SCALE_FACTOR);
+TxSize CalculateMaximumSignedTxSize(const CTransaction& tx, const CWallet* wallet, const CCoinControl* coin_control = nullptr, int witness_discount_scale = WITNESS_SCALE_FACTOR) EXCLUSIVE_LOCKS_REQUIRED(wallet->cs_wallet);
 
 /**
  * COutputs available for spending, stored by OutputType.

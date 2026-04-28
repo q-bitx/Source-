@@ -17,7 +17,9 @@
 #include <common/system.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
+#include <consensus/params.h>
 #include <consensus/validation.h>
+#include <chainparams.h>
 #include <external_signer.h>
 #include <interfaces/chain.h>
 #include <interfaces/handler.h>
@@ -2328,7 +2330,8 @@ bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint,
 {
     bool pq_witness_program_templates = false;
     if (HaveChain()) {
-        if (const std::optional<int> h = chain().getHeight(); h.has_value() && *h + 1 >= Consensus::PQ_WITNESS_ACTIVATION_HEIGHT) {
+        if (const std::optional<int> h = chain().getHeight();
+            h.has_value() && Consensus::IsPQWitnessEnabled(Params().GetConsensus(), *h + 1)) {
             pq_witness_program_templates = true;
         }
     }
@@ -2373,11 +2376,18 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbtx, bo
     }
 
     const PrecomputedTransactionData txdata = PrecomputePSBTData(psbtx);
+    bool pq_witness_program_templates = false;
+    if (HaveChain()) {
+        if (const std::optional<int> h = chain().getHeight();
+            h.has_value() && Consensus::IsPQWitnessEnabled(Params().GetConsensus(), *h + 1)) {
+            pq_witness_program_templates = true;
+        }
+    }
 
     // Fill in information from ScriptPubKeyMans
     for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
         int n_signed_this_spkm = 0;
-        const auto error{spk_man->FillPSBT(psbtx, txdata, sighash_type, sign, bip32derivs, &n_signed_this_spkm, finalize)};
+        const auto error{spk_man->FillPSBT(psbtx, txdata, sighash_type, sign, bip32derivs, &n_signed_this_spkm, finalize, pq_witness_program_templates)};
         if (error) {
             return error;
         }

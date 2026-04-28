@@ -8,6 +8,7 @@
 #include <chainparams.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
+#include <consensus/params.h>
 #include <core_io.h>
 #include <crypto/dilithium.h>
 #include <crypto/dilithium_key.h>
@@ -292,10 +293,11 @@ RPCHelpMan pqsendtoaddress()
             throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to get chain tip height");
         }
         const int next_height = *tipHeightOpt + 1;
-        const bool pq_witness_active = (next_height >= Consensus::PQ_WITNESS_ACTIVATION_HEIGHT);
+        const Consensus::Params& consensus{Params().GetConsensus()};
+        const bool pq_witness_active = Consensus::IsPQWitnessEnabled(consensus, next_height);
         if (!pq_witness_active && (std::holds_alternative<DilithiumWitnessV0KeyHash>(toDest) || std::holds_alternative<DilithiumWitnessV0ScriptHash>(toDest))) {
             throw JSONRPCError(RPC_INVALID_REQUEST,
-                strprintf("PQ witness is not active until height %d", Consensus::PQ_WITNESS_ACTIVATION_HEIGHT));
+                strprintf("PQ witness is not active until height %d", consensus.nPQWitnessHeight));
         }
 
         CAmount amount = AmountFromValue(request.params[2]);
