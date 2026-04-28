@@ -314,9 +314,17 @@ void Chainstate::MaybeUpdateMempoolForReorg(
     const int old_tip_height{old_tip ? old_tip->nHeight : -1};
     const CBlockIndex* const new_tip{m_chain.Tip()};
     const int new_tip_height{new_tip ? new_tip->nHeight : -1};
-    if (IsWitnessDiscountScaleChangedAcrossTips(consensus, old_tip_height, new_tip_height)) {
-        LogPrintf("PQ witness activation state changed across reorg; clearing mempool to avoid stale witness discount scale/policy flags (old_next_height=%d new_next_height=%d)\n",
-                  old_tip_height + 1, new_tip_height + 1);
+    const bool witness_scale_changed{IsWitnessDiscountScaleChangedAcrossTips(consensus, old_tip_height, new_tip_height)};
+    const bool pq_sigops_changed{IsPQSigopsActivationChangedAcrossTips(consensus, old_tip_height, new_tip_height)};
+    if (witness_scale_changed || pq_sigops_changed) {
+        if (pq_sigops_changed) {
+            LogPrintf("PQ sigops activation state changed across reorg; clearing mempool to avoid stale sigop cost/policy flags (old_next_height=%d new_next_height=%d)\n",
+                      old_tip_height + 1, new_tip_height + 1);
+        }
+        if (witness_scale_changed) {
+            LogPrintf("PQ witness activation state changed across reorg; clearing mempool to avoid stale witness discount scale/policy flags (old_next_height=%d new_next_height=%d)\n",
+                      old_tip_height + 1, new_tip_height + 1);
+        }
         m_mempool->removeForReorg(m_chain, [](CTxMemPool::txiter) { return true; });
         return;
     }

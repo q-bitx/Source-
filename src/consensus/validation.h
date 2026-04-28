@@ -154,6 +154,14 @@ static inline bool IsWitnessDiscountScaleChangedAcrossTips(const Consensus::Para
     return GetWitnessDiscountScale(params, old_tip_height + 1) != GetWitnessDiscountScale(params, new_tip_height + 1);
 }
 
+/** True when next-block PQ sigops activation state changes because tip crossed nPQSigopsHeight. */
+static inline bool IsPQSigopsActivationChangedAcrossTips(const Consensus::Params& params, int old_tip_height, int new_tip_height)
+{
+    const bool old_active = (old_tip_height + 1) >= params.nPQSigopsHeight;
+    const bool new_active = (new_tip_height + 1) >= params.nPQSigopsHeight;
+    return old_active != new_active;
+}
+
 // Legacy scale-4 helpers (e.g. tests, contexts without a chain height).
 static inline int32_t GetTransactionWeight(const CTransaction& tx)
 {
