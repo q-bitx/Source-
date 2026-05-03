@@ -239,6 +239,9 @@ static const CRPCConvertParam vRPCConvertParams[] =
      { "pqsendto", 1, "from_vout" },
     { "pqsendto", 6, "amount" },
     { "pqsendto", 7, "fee" },
+    { "pqconsolidatelegacy", 2, "max_inputs" },
+    { "pqconsolidatelegacy", 3, "dry_run" },
+    { "pqconsolidatelegacy", 4, "max_batches" },
     { "simulaterawtransaction", 0, "rawtxs" },
     { "simulaterawtransaction", 1, "options" },
     { "simulaterawtransaction", 1, "include_watchonly"},
@@ -387,14 +390,19 @@ UniValue RPCConvertNamedValues(const std::string &strMethod, const std::vector<s
     UniValue positional_args{UniValue::VARR};
 
     for (std::string_view s: strParams) {
-        size_t pos = s.find('=');
-        if (pos == std::string::npos) {
+        const size_t eq = s.find('=');
+        if (eq == std::string::npos) {
             positional_args.push_back(rpcCvtTable.ArgToUniValue(s, strMethod, positional_args.size()));
             continue;
         }
 
-        std::string name{s.substr(0, pos)};
-        std::string_view value{s.substr(pos+1)};
+        // Support "name:=json" with -named: first '=' separates value; ':' before '=' is not part of the name.
+        size_t name_end = eq;
+        if (eq > 0 && s[eq - 1] == ':') {
+            name_end = eq - 1;
+        }
+        const std::string name{s.substr(0, name_end)};
+        const std::string_view value{s.substr(eq + 1)};
 
         // Intentionally overwrite earlier named values with later ones as a
         // convenience for scripts and command line users that want to merge

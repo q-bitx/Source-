@@ -10,6 +10,7 @@
 #include <blockfilter.h>
 #include <chain.h>
 #include <chainparams.h>
+#include <consensus/validation.h>
 #include <core_io.h>
 #include <flatfile.h>
 #include <httpserver.h>
@@ -34,6 +35,7 @@
 #include "clientversion.h"
 
 #include <any>
+#include <optional>
 #include <vector>
 
 #include <univalue.h>
@@ -748,8 +750,17 @@ static bool rest_tx(const std::any& context, HTTPRequest* req, const std::string
     }
 
     case RESTResponseFormat::JSON: {
+        std::optional<int> witness_discount_scale;
+        if (!hashBlock.IsNull()) {
+            LOCK(cs_main);
+            const CBlockIndex* pindex = node->chainman->m_blockman.LookupBlockIndex(hashBlock);
+            if (pindex) {
+                witness_discount_scale = GetWitnessDiscountScale(node->chainman->GetConsensus(), pindex->nHeight);
+            }
+        }
         UniValue objTx(UniValue::VOBJ);
-        TxToUniv(*tx, /*block_hash=*/hashBlock, /*entry=*/ objTx);
+        TxToUniv(*tx, /*block_hash=*/hashBlock, /*entry=*/objTx, /*include_hex=*/true, /*txundo=*/nullptr,
+                 TxVerbosity::SHOW_DETAILS, witness_discount_scale);
         std::string strJSON = objTx.write() + "\n";
         req->WriteHeader("Content-Type", "application/json");
         req->WriteReply(HTTP_OK, strJSON);

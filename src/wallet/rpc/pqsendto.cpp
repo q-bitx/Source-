@@ -213,8 +213,11 @@ RPCHelpMan pqsendtoaddress()
         CKeyID keyid;
         if (const DilithiumPKHash* dil_pkhash = std::get_if<DilithiumPKHash>(&fromDest)) {
             keyid = CKeyID(uint160(*dil_pkhash));
+        } else if (const DilithiumWitnessV0KeyHash* dil_wkh = std::get_if<DilithiumWitnessV0KeyHash>(&fromDest)) {
+            keyid = CKeyID(uint160(*dil_wkh));
         } else {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "from_address must be a Dilithium P2PKH address");
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+                "from_address must be a Dilithium P2PKH or native PQ witness (pq-bech32) address");
         }
 
         std::vector<unsigned char> privkeyBytes;
@@ -274,6 +277,17 @@ RPCHelpMan pqsendtoaddress()
             throw JSONRPCError(RPC_WALLET_ERROR, "Public key does not match from_address");
         }
 
+        std::optional<int> tipHeightOpt = wallet->chain().getHeight();
+        if (!tipHeightOpt.has_value()) {
+            throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to get chain tip height");
+        }
+        const int next_height = *tipHeightOpt + 1;
+        const Consensus::Params& consensus{Params().GetConsensus()};
+        const bool pq_witness_active = Consensus::IsPQWitnessEnabled(consensus, next_height);
+        const CScript changeScriptPubKey = pq_witness_active
+            ? GetScriptForDestination(DilithiumWitnessV0KeyHash(dilPubKey))
+            : fromScriptPubKey;
+
         // Parse to_address
         std::string toAddress = request.params[1].get_str();
         CTxDestination toDest = DecodeDestination(toAddress);
@@ -288,13 +302,6 @@ RPCHelpMan pqsendtoaddress()
                 strprintf("to_address must be a PQ/Dilithium address. '%s' is not a PQ address.", toAddress));
         }
 
-        std::optional<int> tipHeightOpt = wallet->chain().getHeight();
-        if (!tipHeightOpt.has_value()) {
-            throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to get chain tip height");
-        }
-        const int next_height = *tipHeightOpt + 1;
-        const Consensus::Params& consensus{Params().GetConsensus()};
-        const bool pq_witness_active = Consensus::IsPQWitnessEnabled(consensus, next_height);
         if (!pq_witness_active && (std::holds_alternative<DilithiumWitnessV0KeyHash>(toDest) || std::holds_alternative<DilithiumWitnessV0ScriptHash>(toDest))) {
             throw JSONRPCError(RPC_INVALID_REQUEST,
                 strprintf("PQ witness is not active until height %d", consensus.nPQWitnessHeight));
@@ -429,7 +436,7 @@ RPCHelpMan pqsendtoaddress()
                 change = totalInputAmount - sendAmount - fee;
 
                 if (change > 0) {
-                    CTxOut changeOutput(change, fromScriptPubKey);
+                    CTxOut changeOutput(change, changeScriptPubKey);
                     if (IsDust(changeOutput, dustRelayFee)) {
                         change = 0;
                         fee = totalInputAmount - sendAmount;
@@ -450,7 +457,7 @@ RPCHelpMan pqsendtoaddress()
             }
             mtx.vout.emplace_back(sendAmount, outputScriptPubKey);
             if (change > 0) {
-                mtx.vout.emplace_back(change, fromScriptPubKey);
+                mtx.vout.emplace_back(change, changeScriptPubKey);
             }
 
             // Sign

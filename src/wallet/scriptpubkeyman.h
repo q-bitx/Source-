@@ -710,6 +710,10 @@ public:
 
     uint256 GetID() const override;
 
+    //! Dilithium-only placeholder managers are constructed without a Descriptor; WalletDescriptor::id
+    //! defaults to zero and would collide in CWallet::m_spk_managers. Call before AddScriptPubKeyMan.
+    void SetPlaceholderDescriptorId(const uint256& id);
+
     void SetCache(const DescriptorCache& cache);
 
     bool AddKey(const CKeyID& key_id, const CKey& key);

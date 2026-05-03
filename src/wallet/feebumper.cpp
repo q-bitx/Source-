@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <common/system.h>
+#include <chainparams.h>
 #include <consensus/validation.h>
 #include <interfaces/chain.h>
 #include <node/types.h>
@@ -127,7 +128,10 @@ static CFeeRate EstimateFeeRate(const CWallet& wallet, const CWalletTx& wtx, con
     // Get the fee rate of the original transaction. This is calculated from
     // the tx fee/vsize, so it may have been rounded down. Add 1 satoshi to the
     // result.
-    int64_t txSize = GetVirtualTransactionSize(*(wtx.tx));
+    const auto height{wallet.chain().getHeight()};
+    const int next_h{height ? *height + 1 : 0};
+    const int wscale{GetWitnessDiscountScale(Params().GetConsensus(), next_h)};
+    const int64_t txSize{GetVirtualTransactionSize(*(wtx.tx), 0, 0, wscale)};
     CFeeRate feerate(old_fee, txSize);
     feerate += CFeeRate(1);
 

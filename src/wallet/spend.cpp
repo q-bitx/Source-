@@ -150,6 +150,24 @@ int CalculateMaximumSignedInputSize(const CTxOut& txout, const COutPoint outpoin
             }
         }
     }
+    if (whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        DilithiumPKHash dilPkhash{uint160(solutions[0])};
+        CDilithiumPubKey dilPubKey;
+        if (provider->GetDilithiumPubKey(dilPkhash, dilPubKey)) {
+            // Native PQ witness: empty scriptSig, witness stack <sig> <pubkey> (same payloads as P2PKH-style PQ).
+            const int64_t sig_size = DILITHIUM_SIGNATUREBYTES + 1;
+            const int64_t pubkey_size = DILITHIUM_PUBLICKEYBYTES;
+            const int64_t sig_push_overhead = (sig_size > 255) ? 3 : (sig_size > 75) ? 2 : 1;
+            const int64_t pubkey_push_overhead = (pubkey_size > 255) ? 3 : (pubkey_size > 75) ? 2 : 1;
+            const int64_t w_sig = sig_push_overhead + sig_size;
+            const int64_t w_pk = pubkey_push_overhead + pubkey_size;
+            const int64_t witstack_elems = GetSizeOfCompactSize(2);
+            const int64_t sat_weight = w_sig + w_pk;
+            const int64_t scriptsig_len = 1;
+            const int64_t input_weight = (32 + 4 + 4 + scriptsig_len) * witness_discount_scale + witstack_elems + sat_weight;
+            return static_cast<int>(GetVirtualTransactionSize(input_weight, 0, 0, witness_discount_scale));
+        }
+    }
 
     return -1;
 }
@@ -208,6 +226,18 @@ static std::optional<int64_t> GetSignedTxinWeight(const CWallet* wallet, const C
         // Not segwit, so no witness discount
         return (32 + 4 + 4 + scriptsig_len_varint + scriptsig_len) * witness_discount_scale;
     }
+    if (whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        const int64_t sig_size = DILITHIUM_SIGNATUREBYTES + 1;
+        const int64_t pubkey_size = DILITHIUM_PUBLICKEYBYTES;
+        const int64_t sig_push_overhead = (sig_size > 255) ? 3 : (sig_size > 75) ? 2 : 1;
+        const int64_t pubkey_push_overhead = (pubkey_size > 255) ? 3 : (pubkey_size > 75) ? 2 : 1;
+        const int64_t w_sig = sig_push_overhead + sig_size;
+        const int64_t w_pk = pubkey_push_overhead + pubkey_size;
+        const int64_t witstack_elems = GetSizeOfCompactSize(2);
+        const int64_t sat_weight = w_sig + w_pk;
+        const int64_t scriptsig_len = 1;
+        return (32 + 4 + 4 + scriptsig_len) * witness_discount_scale + witstack_elems + sat_weight;
+    }
 
     return {};
 }
@@ -222,7 +252,8 @@ TxSize CalculateMaximumSignedTxSize(const CTransaction &tx, const CWallet *walle
     bool is_segwit = std::any_of(txouts.begin(), txouts.end(), [&](const CTxOut& txo) {
         std::unique_ptr<Descriptor> desc{GetDescriptor(wallet, coin_control, txo.scriptPubKey)};
         if (desc) return IsSegwit(*desc);
-        return false;
+        std::vector<std::vector<unsigned char>> pq_sol;
+        return Solver(txo.scriptPubKey, pq_sol) == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH;
     });
     // Segwit marker and flag
     if (is_segwit) weight += 2;

@@ -56,15 +56,15 @@ BOOST_AUTO_TEST_CASE(witness_discount_scale_change_detected_across_activation_re
 BOOST_AUTO_TEST_CASE(pq_sigops_activation_change_detected_across_activation_reorg_boundary)
 {
     Consensus::Params p{};
-    p.nPQSigopsHeight = 210000;
+    p.nPQSigopsHeight = 230000;
 
-    // Crossing forward: next height goes from 209999 -> 210000
-    BOOST_CHECK(IsPQSigopsActivationChangedAcrossTips(p, 209998, 209999));
+    // Crossing forward: next height goes from 229999 -> 230000
+    BOOST_CHECK(IsPQSigopsActivationChangedAcrossTips(p, 229998, 229999));
     // Crossing backward
-    BOOST_CHECK(IsPQSigopsActivationChangedAcrossTips(p, 209999, 209998));
+    BOOST_CHECK(IsPQSigopsActivationChangedAcrossTips(p, 229999, 229998));
 
     // Non-crossing before
-    BOOST_CHECK(!IsPQSigopsActivationChangedAcrossTips(p, 209997, 209998));
+    BOOST_CHECK(!IsPQSigopsActivationChangedAcrossTips(p, 229997, 229998));
     // Non-crossing after
-    BOOST_CHECK(!IsPQSigopsActivationChangedAcrossTips(p, 210000, 210001));
+    BOOST_CHECK(!IsPQSigopsActivationChangedAcrossTips(p, 230000, 230001));
 }

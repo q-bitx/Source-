@@ -2138,6 +2138,21 @@ isminetype DescriptorScriptPubKeyMan::IsMine(const CScript& script) const
     if (m_map_script_pub_keys.count(script) > 0) {
         return ISMINE_SPENDABLE;
     }
+    // Dilithium receive outputs are not expanded from the Bitcoin descriptor; recognize by script pattern.
+    std::vector<std::vector<unsigned char>> solutions;
+    const TxoutType whichType = Solver(script, solutions);
+    if (whichType == TxoutType::DILITHIUM_PUBKEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        const CKeyID keyid = CKeyID(uint160(solutions[0]));
+        if (HaveDilithiumKey_Locked(keyid)) {
+            return ISMINE_SPENDABLE;
+        }
+    }
+    if (whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        const CKeyID keyid = CKeyID(uint160(solutions[0]));
+        if (HaveDilithiumKey_Locked(keyid)) {
+            return ISMINE_SPENDABLE;
+        }
+    }
     return ISMINE_NO;
 }
 
@@ -2343,7 +2358,19 @@ std::vector<WalletDestination> DescriptorScriptPubKeyMan::MarkUnusedAddresses(co
     LOCK(cs_desc_man);
     std::vector<WalletDestination> result;
     if (IsMine(script)) {
-        int32_t index = m_map_script_pub_keys[script];
+        // On-demand Dilithium placeholder ScriptPubKeyMans have no Bitcoin descriptor; PQ keys live in
+        // m_map_dilithium_keys / DB and are not descriptor-expanded or keypool-indexed.
+        if (!m_wallet_descriptor.descriptor) {
+            WalletLogPrintf("%s: Descriptor-less Dilithium placeholder SPKM matched script; skipping descriptor keypool marking\n", __func__);
+            return result;
+        }
+
+        const auto it_spk = m_map_script_pub_keys.find(script);
+        if (it_spk == m_map_script_pub_keys.end()) {
+            // e.g. Dilithium receive script recognized by IsMine but not produced from this descriptor's range.
+            return result;
+        }
+        const int32_t index = it_spk->second;
         if (index >= m_wallet_descriptor.next_index) {
             WalletLogPrintf("%s: Detected a used keypool item at index %d, mark all keypool items up to this item as used\n", __func__, index);
             auto out_keys = std::make_unique<FlatSigningProvider>();
@@ -2691,6 +2718,23 @@ std::unique_ptr<FlatSigningProvider> DescriptorScriptPubKeyMan::GetSigningProvid
             }
         }
     }
+    if (whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        const CKeyID keyid = CKeyID(uint160(solutions[0]));
+        if (HaveDilithiumKey_Locked(keyid)) {
+            std::unique_ptr<FlatSigningProvider> out_keys = std::make_unique<FlatSigningProvider>();
+            std::vector<unsigned char> privkeyBytes;
+            std::vector<unsigned char> pubkeyBytes;
+            if (GetDilithiumKeys(keyid, privkeyBytes, pubkeyBytes)) {
+                DilithiumPKHash dilPkhash(keyid);
+                CDilithiumPubKey dilPubKey(pubkeyBytes);
+                out_keys->dilithium_pubkeys[dilPkhash] = dilPubKey;
+                if (include_private && !privkeyBytes.empty()) {
+                    out_keys->dilithium_keys[dilPkhash] = privkeyBytes;
+                }
+                return out_keys;
+            }
+        }
+    }
 
     // Find the index of the script
     auto it = m_map_script_pub_keys.find(script);
@@ -2927,6 +2971,13 @@ uint256 DescriptorScriptPubKeyMan::GetID() const
 {
     LOCK(cs_desc_man);
     return m_wallet_descriptor.id;
+}
+
+void DescriptorScriptPubKeyMan::SetPlaceholderDescriptorId(const uint256& id)
+{
+    LOCK(cs_desc_man);
+    Assume(m_wallet_descriptor.descriptor == nullptr);
+    m_wallet_descriptor.id = id;
 }
 
 void DescriptorScriptPubKeyMan::SetCache(const DescriptorCache& cache)

@@ -206,7 +206,7 @@ UniValue blockToJSON(BlockManager& blockman, const CBlock& block, const CBlockIn
                 // coinbase transaction (i.e. i == 0) doesn't have undo data
                 const CTxUndo* txundo = (have_undo && i > 0) ? &blockUndo.vtxundo.at(i - 1) : nullptr;
                 UniValue objTx(UniValue::VOBJ);
-                TxToUniv(*tx, /*block_hash=*/uint256(), /*entry=*/objTx, /*include_hex=*/true, txundo, verbosity);
+                TxToUniv(*tx, /*block_hash=*/uint256(), /*entry=*/objTx, /*include_hex=*/true, txundo, verbosity, json_wscale);
                 txs.push_back(std::move(objTx));
             }
             break;
@@ -747,7 +747,7 @@ static RPCHelpMan getblock()
                     {RPCResult::Type::NUM, "confirmations", "The number of confirmations, or -1 if the block is not on the main chain"},
                     {RPCResult::Type::NUM, "size", "The block size"},
                     {RPCResult::Type::NUM, "strippedsize", "The block size excluding witness data"},
-                    {RPCResult::Type::NUM, "weight", "The block weight as defined in BIP 141"},
+                    {RPCResult::Type::NUM, "weight", "The block weight using the active witness discount scale at this height (BIP141 k=4 before PQ witness activation, k=16 after)"},
                     {RPCResult::Type::NUM, "height", "The block height or index"},
                     {RPCResult::Type::NUM, "version", "The block version"},
                     {RPCResult::Type::STR_HEX, "versionHex", "The block version formatted in hexadecimal"},
@@ -773,7 +773,13 @@ static RPCHelpMan getblock()
                     {
                         {RPCResult::Type::OBJ, "", "",
                         {
-                            {RPCResult::Type::ELISION, "", "The transactions in the format of the getrawtransaction RPC. Different from verbosity = 1 \"tx\" result"},
+                            {RPCResult::Type::ELISION, "", "The transactions in the format of the getrawtransaction RPC; for getblock verbosity 2+, weight and vsize use the block's witness_discount_scale (with legacy bip141_* / pq_* fields when k>4). Different from verbosity = 1 \"tx\" result"},
+                            {RPCResult::Type::NUM, "strippedsize", "Serialized transaction size excluding witness data"},
+                            {RPCResult::Type::NUM, "witness_discount_scale", /*optional=*/true, "Active witness discount k for this block height (same as block weight accounting). Only present for transactions included from getblock."},
+                            {RPCResult::Type::NUM, "bip141_weight", /*optional=*/true, "Legacy BIP141 (k=4) weight when witness_discount_scale > 4"},
+                            {RPCResult::Type::NUM, "bip141_vsize", /*optional=*/true, "Legacy BIP141 (k=4) virtual size when witness_discount_scale > 4"},
+                            {RPCResult::Type::NUM, "pq_weight", /*optional=*/true, "PQ-scaled weight (same as weight) when witness_discount_scale > 4"},
+                            {RPCResult::Type::NUM, "pq_vsize", /*optional=*/true, "PQ-scaled virtual size (same as vsize) when witness_discount_scale > 4"},
                             {RPCResult::Type::NUM, "fee", "The transaction fee in " + CURRENCY_UNIT + ", omitted if block undo data is not available"},
                         }},
                     }},

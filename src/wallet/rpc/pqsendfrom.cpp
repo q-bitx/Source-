@@ -55,6 +55,11 @@ static bool IsPQScript(const CScript& script)
            whichType == TxoutType::QBITX_DILITHIUM;
 }
 
+static bool IsNativePQWitnessProgram(const CScript& script)
+{
+    return script.size() == 22 && script[0] == OP_2 && script[1] == 20;
+}
+
 // Extract Dilithium public key from secret key bytes
 // In some implementations, the secret key storage format may include the public key appended
 // or the Dilithium secret key format itself may embed the public key
@@ -184,12 +189,14 @@ RPCHelpMan pqsendfrom()
                 strprintf("from_address must be a PQ/Dilithium address. '%s' is not a PQ address. Use getnewaddress with address_type='pq' to create a PQ address.", fromAddress));
         }
 
-        // Extract CKeyID from DilithiumPKHash address
         CKeyID keyid;
         if (const DilithiumPKHash* dil_pkhash = std::get_if<DilithiumPKHash>(&fromDest)) {
             keyid = CKeyID(uint160(*dil_pkhash));
+        } else if (const DilithiumWitnessV0KeyHash* dil_wkh = std::get_if<DilithiumWitnessV0KeyHash>(&fromDest)) {
+            keyid = CKeyID(uint160(*dil_wkh));
         } else {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "from_address must be a Dilithium P2PKH address");
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+                "from_address must be a Dilithium P2PKH or native PQ witness (pq-bech32) address");
         }
 
         // Retrieve Dilithium private and public keys from wallet's DescriptorScriptPubKeyMan
@@ -267,6 +274,17 @@ RPCHelpMan pqsendfrom()
                          HexStr(keyid), HexStr(derivedKeyid)));
         }
 
+        std::optional<int> tipHeightOptEarly = wallet->chain().getHeight();
+        if (!tipHeightOptEarly.has_value()) {
+            throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to get chain tip height");
+        }
+        const int next_height_early = *tipHeightOptEarly + 1;
+        const Consensus::Params& consensusEarly{Params().GetConsensus()};
+        const bool pq_witness_active = Consensus::IsPQWitnessEnabled(consensusEarly, next_height_early);
+        const CScript changeScriptPubKey = pq_witness_active
+            ? GetScriptForDestination(DilithiumWitnessV0KeyHash(dilPubKey))
+            : fromScriptPubKey;
+
         // Parse to_address
         std::string toAddress = request.params[1].get_str();
         CTxDestination toDest = DecodeDestination(toAddress);
@@ -295,18 +313,9 @@ RPCHelpMan pqsendfrom()
         }
         CFeeRate feerate = GetFeeRate(feePolicy);
 
-        // Verify chain state is available using wallet's chain interface (not NodeContext)
-        // Note: wallet RPC requests may not carry NodeContext, so we use wallet.chain() instead
-        std::optional<int> tipHeightOpt = wallet->chain().getHeight();
-        if (!tipHeightOpt.has_value()) {
-            throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to get chain tip height");
-        }
-        const int next_height = *tipHeightOpt + 1;
-        const Consensus::Params& consensus{Params().GetConsensus()};
-        const bool pq_witness_active = Consensus::IsPQWitnessEnabled(consensus, next_height);
         if (!pq_witness_active && (std::holds_alternative<DilithiumWitnessV0KeyHash>(toDest) || std::holds_alternative<DilithiumWitnessV0ScriptHash>(toDest))) {
             throw JSONRPCError(RPC_INVALID_REQUEST,
-                strprintf("PQ witness is not active until height %d", consensus.nPQWitnessHeight));
+                strprintf("PQ witness is not active until height %d", consensusEarly.nPQWitnessHeight));
         }
 
         // Find UTXOs for the from_address scriptPubKey using wallet's listunspent-like functionality
@@ -395,7 +404,7 @@ RPCHelpMan pqsendfrom()
         CFeeRate dustRelayFee = wallet->chain().relayDustFee();
         bool changeIsDust = false;
         if (change > 0) {
-            CTxOut changeOutput(change, fromScriptPubKey);
+            CTxOut changeOutput(change, changeScriptPubKey);
             changeIsDust = IsDust(changeOutput, dustRelayFee);
         }
         
@@ -427,30 +436,43 @@ RPCHelpMan pqsendfrom()
         // Add outputs
         mtx.vout.emplace_back(amount, outputScriptPubKey);
         if (change > 0) {
-            mtx.vout.emplace_back(change, fromScriptPubKey);
+            mtx.vout.emplace_back(change, changeScriptPubKey);
         }
 
         // Sign transaction using PQ signing
         CTransaction tx(mtx);
         int32_t nHashType = SIGHASH_ALL;
-        CAmount amountForSighash = 0; // BASE mode doesn't use amount
-        
+        const bool from_is_native_pq_witness = IsNativePQWitnessProgram(fromScriptPubKey);
+        CScript witness_script;
+        if (from_is_native_pq_witness) {
+            const std::vector<unsigned char> program(fromScriptPubKey.begin() + 2, fromScriptPubKey.end());
+            witness_script << OP_DUP << OP_HASH160 << program << OP_EQUALVERIFY << OP_CHECKSIG;
+        }
         for (size_t i = 0; i < mtx.vin.size(); ++i) {
-            uint256 sighash = SignatureHash(fromScriptPubKey, tx, i, nHashType, amountForSighash, SigVersion::BASE, nullptr);
-            
+            const CAmount input_amount = selectedUTXOs[i].second;
+            const uint256 sighash = from_is_native_pq_witness
+                ? SignatureHash(witness_script, tx, i, nHashType, input_amount, SigVersion::WITNESS_V0, nullptr)
+                : SignatureHash(fromScriptPubKey, tx, i, nHashType, 0, SigVersion::BASE, nullptr);
+
             std::vector<unsigned char> msgHash(sighash.begin(), sighash.end());
             std::vector<unsigned char> signature;
             if (!PQ_Sign(signature, msgHash, privkeyBytes)) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Failed to sign Dilithium transaction");
             }
-            
-            // Build scriptSig: <sig_with_hashtype> <pubkey>
+
             std::vector<unsigned char> sigWithHashtype = signature;
             sigWithHashtype.push_back(static_cast<unsigned char>(nHashType));
-            
-            CScript scriptSig;
-            scriptSig << sigWithHashtype << pubkeyBytes;
-            mtx.vin[i].scriptSig = scriptSig;
+            if (from_is_native_pq_witness) {
+                mtx.vin[i].scriptSig = CScript{};
+                mtx.vin[i].scriptWitness.stack.clear();
+                mtx.vin[i].scriptWitness.stack.push_back(sigWithHashtype);
+                mtx.vin[i].scriptWitness.stack.push_back(pubkeyBytes);
+            } else {
+                CScript scriptSig;
+                scriptSig << sigWithHashtype << pubkeyBytes;
+                mtx.vin[i].scriptSig = scriptSig;
+                mtx.vin[i].scriptWitness.stack.clear();
+            }
         }
 
         // Broadcast transaction using wallet's chain interface (not NodeContext)

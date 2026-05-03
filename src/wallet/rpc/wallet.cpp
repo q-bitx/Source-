@@ -1035,8 +1035,10 @@ RPCHelpMan getaddressinfo();
 RPCHelpMan getnewaddress();
 RPCHelpMan getrawchangeaddress();
 RPCHelpMan getnewdilithiumaddress();
+RPCHelpMan getnewlegacypqaddress();
 RPCHelpMan pqsendfrom();
 RPCHelpMan pqsendtoaddress();
+RPCHelpMan pqconsolidatelegacy();
 RPCHelpMan setlabel();
 RPCHelpMan listaddressgroupings();
 RPCHelpMan addmultisigaddress();
@@ -1128,8 +1130,10 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &gethdkeys},
         {"wallet", &getnewaddress},
         {"wallet", &getnewdilithiumaddress},
+        {"wallet", &getnewlegacypqaddress},
         {"wallet", &pqsendfrom},
         {"wallet", &pqsendtoaddress},
+        {"wallet", &pqconsolidatelegacy},
         {"wallet", &getrawchangeaddress},
         {"wallet", &getreceivedbyaddress},
         {"wallet", &getreceivedbylabel},

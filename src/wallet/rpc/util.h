@@ -18,6 +18,10 @@ class JSONRPCRequest;
 class UniValue;
 struct bilingual_str;
 
+namespace interfaces {
+class Chain;
+}
+
 namespace wallet {
 class LegacyScriptPubKeyMan;
 enum class DatabaseStatus;
@@ -52,6 +56,13 @@ void PushParentDescriptors(const CWallet& wallet, const CScript& script_pubkey, 
 
 void HandleWalletError(const std::shared_ptr<CWallet> wallet, DatabaseStatus& status, bilingual_str& error);
 void AppendLastProcessedBlock(UniValue& entry, const CWallet& wallet) EXCLUSIVE_LOCKS_REQUIRED(wallet.cs_wallet);
+
+/**
+ * PQ wallet/RPC policy: use the next-chain-tip height (current tip + 1) to decide whether
+ * PQ witness rules apply, matching transaction creation (mempool/block acceptance).
+ * Throws JSONRPCError if the chain height is unavailable.
+ */
+bool IsPqWitnessActiveForNextBlock(interfaces::Chain& chain);
 } //  namespace wallet
 
 #endif // BITCOIN_WALLET_RPC_UTIL_H

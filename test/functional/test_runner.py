@@ -108,6 +108,10 @@ BASE_SCRIPTS = [
     'feature_maxuploadtarget.py',
     'feature_assumeutxo.py',
     'mempool_updatefromblock.py',
+    'feature_pq_witness_mempool_rpc.py --legacy-wallet',
+    'feature_pq_witness_mempool_rpc.py --descriptors',
+    'feature_pq_consolidate_legacy.py --legacy-wallet',
+    'feature_pq_consolidate_legacy.py --descriptors',
     'mempool_persist.py --descriptors',
     # vv Tests less than 60s vv
     'rpc_psbt.py --legacy-wallet',
