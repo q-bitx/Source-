@@ -4,7 +4,10 @@
 
 #include <wallet/rpc/util.h>
 
+#include <chainparams.h>
 #include <common/url.h>
+#include <consensus/params.h>
+#include <interfaces/chain.h>
 #include <rpc/util.h>
 #include <util/any.h>
 #include <util/translation.h>
@@ -130,8 +133,15 @@ std::string LabelFromValue(const UniValue& value)
 void PushParentDescriptors(const CWallet& wallet, const CScript& script_pubkey, UniValue& entry)
 {
     UniValue parent_descs(UniValue::VARR);
-    for (const auto& desc: wallet.GetWalletDescriptors(script_pubkey)) {
-        parent_descs.push_back(desc.descriptor->ToString());
+    for (const auto& w_desc : wallet.GetWalletDescriptors(script_pubkey)) {
+        // Dilithium placeholder DescriptorScriptPubKeyMans (on-demand PQ storage) have no Bitcoin
+        // descriptor: GetWalletDescriptor() returns a shell with descriptor == nullptr. PQ keys live in
+        // m_map_dilithium_* / DB, not descriptor expansion. listunspent must not call ToString() on null.
+        // Regular descriptor SPKMs (combo/tr/etc.) always have a non-null descriptor here.
+        if (!w_desc.descriptor) {
+            continue;
+        }
+        parent_descs.push_back(w_desc.descriptor->ToString());
     }
     entry.pushKV("parent_descs", std::move(parent_descs));
 }
@@ -170,6 +180,15 @@ void AppendLastProcessedBlock(UniValue& entry, const CWallet& wallet)
     lastprocessedblock.pushKV("hash", wallet.GetLastBlockHash().GetHex());
     lastprocessedblock.pushKV("height", wallet.GetLastBlockHeight());
     entry.pushKV("lastprocessedblock", std::move(lastprocessedblock));
+}
+
+bool IsPqWitnessActiveForNextBlock(interfaces::Chain& chain)
+{
+    const std::optional<int> h = chain.getHeight();
+    if (!h.has_value()) {
+        throw JSONRPCError(RPC_INTERNAL_ERROR, "Chain tip height unavailable (is the node synced?)");
+    }
+    return Consensus::IsPQWitnessEnabled(Params().GetConsensus(), *h + 1);
 }
 
 } // namespace wallet

@@ -17,6 +17,7 @@
 #include <consensus/tx_check.h>
 #include <consensus/tx_verify.h>
 #include <consensus/validation.h>
+#include <deploymentstatus.h>
 #include <cuckoocache.h>
 #include <flatfile.h>
 #include <hash.h>
@@ -41,6 +42,7 @@
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <random.h>
+#include <script/interpreter.h>
 #include <script/opcodes.h>
 #include <script/pq_script.h>
 #include <script/script.h>
@@ -300,12 +302,33 @@ static bool IsCurrentForFeeEstimation(Chainstate& active_chainstate) EXCLUSIVE_L
 
 void Chainstate::MaybeUpdateMempoolForReorg(
     DisconnectedBlockTransactions& disconnectpool,
-    bool fAddToMempool)
+    bool fAddToMempool,
+    const CBlockIndex* old_tip)
 {
     if (!m_mempool) return;
 
     AssertLockHeld(cs_main);
     AssertLockHeld(m_mempool->cs);
+
+    const Consensus::Params& consensus{m_chainman.GetConsensus()};
+    const int old_tip_height{old_tip ? old_tip->nHeight : -1};
+    const CBlockIndex* const new_tip{m_chain.Tip()};
+    const int new_tip_height{new_tip ? new_tip->nHeight : -1};
+    const bool witness_scale_changed{IsWitnessDiscountScaleChangedAcrossTips(consensus, old_tip_height, new_tip_height)};
+    const bool pq_sigops_changed{IsPQSigopsActivationChangedAcrossTips(consensus, old_tip_height, new_tip_height)};
+    if (witness_scale_changed || pq_sigops_changed) {
+        if (pq_sigops_changed) {
+            LogPrintf("PQ sigops activation state changed across reorg; clearing mempool to avoid stale sigop cost/policy flags (old_next_height=%d new_next_height=%d)\n",
+                      old_tip_height + 1, new_tip_height + 1);
+        }
+        if (witness_scale_changed) {
+            LogPrintf("PQ witness activation state changed across reorg; clearing mempool to avoid stale witness discount scale/policy flags (old_next_height=%d new_next_height=%d)\n",
+                      old_tip_height + 1, new_tip_height + 1);
+        }
+        m_mempool->removeForReorg(m_chain, [](CTxMemPool::txiter) { return true; });
+        return;
+    }
+
     std::vector<uint256> vHashUpdate;
     {
         // disconnectpool is ordered so that the front is the most recently-confirmed
@@ -795,7 +818,11 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
 
     // Rather not work on nonstandard transactions (unless -testnet/-regtest)
     std::string reason;
-    if (m_pool.m_opts.require_standard && !IsStandardTx(tx, m_pool.m_opts.max_datacarrier_bytes, m_pool.m_opts.permit_bare_multisig, m_pool.m_opts.dust_relay_feerate, reason)) {
+    const Consensus::Params& pre_consensus{m_active_chainstate.m_chainman.GetConsensus()};
+    const CBlockIndex* pre_tip{m_active_chainstate.m_chain.Tip()};
+    const int pre_next_h{pre_tip ? pre_tip->nHeight + 1 : 0};
+    const int pre_wscale{GetWitnessDiscountScale(pre_consensus, pre_next_h)};
+    if (m_pool.m_opts.require_standard && !IsStandardTx(tx, m_pool.m_opts.max_datacarrier_bytes, m_pool.m_opts.permit_bare_multisig, m_pool.m_opts.dust_relay_feerate, reason, pre_wscale)) {
         return state.Invalid(TxValidationResult::TX_NOT_STANDARD, reason);
     }
 
@@ -883,7 +910,9 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return false; // state filled in by CheckTxInputs
     }
 
-    if (m_pool.m_opts.require_standard && !AreInputsStandard(tx, m_view)) {
+    const bool pq_sigops_active{DeploymentActiveAfter(m_active_chainstate.m_chain.Tip(), m_active_chainstate.m_chainman, Consensus::DEPLOYMENT_PQ_SIGOPS)};
+
+    if (m_pool.m_opts.require_standard && !AreInputsStandard(tx, m_view, pq_sigops_active)) {
         return state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "bad-txns-nonstandard-inputs");
     }
 
@@ -892,7 +921,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(TxValidationResult::TX_WITNESS_MUTATED, "bad-witness-nonstandard");
     }
 
-    int64_t nSigOpsCost = GetTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS);
+    int64_t nSigOpsCost = GetTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS, pq_sigops_active);
 
     // Keep track of transactions that spend a coinbase, which we re-scan
     // during reorgs to ensure COINBASE_MATURITY is still met.
@@ -911,7 +940,9 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     if (!m_subpackage.m_changeset) {
         m_subpackage.m_changeset = m_pool.GetChangeSet();
     }
-    ws.m_tx_handle = m_subpackage.m_changeset->StageAddition(ptx, ws.m_base_fees, nAcceptTime, m_active_chainstate.m_chain.Height(), entry_sequence, fSpendsCoinbase, nSigOpsCost, lock_points.value());
+    const int mempool_next_h{m_active_chainstate.m_chain.Height() + 1};
+    const int mempool_wscale{GetWitnessDiscountScale(m_active_chainstate.m_chainman.GetConsensus(), mempool_next_h)};
+    ws.m_tx_handle = m_subpackage.m_changeset->StageAddition(ptx, ws.m_base_fees, nAcceptTime, m_active_chainstate.m_chain.Height(), entry_sequence, fSpendsCoinbase, nSigOpsCost, lock_points.value(), mempool_wscale);
 
     // ws.m_modified_fees includes any fee deltas from PrioritiseTransaction
     ws.m_modified_fees = ws.m_tx_handle->GetModifiedFee();
@@ -1236,7 +1267,13 @@ bool MemPoolAccept::PolicyScriptChecks(const ATMPArgs& args, Workspace& ws)
     const CTransaction& tx = *ws.m_ptx;
     TxValidationState& state = ws.m_state;
 
-    constexpr unsigned int scriptVerifyFlags = STANDARD_SCRIPT_VERIFY_FLAGS;
+    unsigned int scriptVerifyFlags = STANDARD_SCRIPT_VERIFY_FLAGS;
+    const Consensus::Params& consensus{m_active_chainstate.m_chainman.GetConsensus()};
+    const CBlockIndex* tip{m_active_chainstate.m_chain.Tip()};
+    const int next_height{tip ? tip->nHeight + 1 : 0};
+    if (Consensus::IsPQWitnessEnabled(consensus, next_height)) {
+        scriptVerifyFlags |= SCRIPT_VERIFY_PQ_WITNESS;
+    }
 
     // Check input scripts and signatures.
     // This is done last to help prevent CPU exhaustion denial-of-service attacks.
@@ -1280,7 +1317,13 @@ bool MemPoolAccept::ConsensusScriptChecks(const ATMPArgs& args, Workspace& ws)
     // There is a similar check in CreateNewBlock() to prevent creating
     // invalid blocks (using TestBlockValidity), however allowing such
     // transactions into the mempool can be exploited as a DoS attack.
-    unsigned int currentBlockScriptVerifyFlags{GetBlockScriptFlags(*m_active_chainstate.m_chain.Tip(), m_active_chainstate.m_chainman)};
+    const CBlockIndex* tip{m_active_chainstate.m_chain.Tip()};
+    unsigned int currentBlockScriptVerifyFlags{tip ? GetBlockScriptFlags(*tip, m_active_chainstate.m_chainman) : (SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_TAPROOT)};
+    const Consensus::Params& consensusParams{m_active_chainstate.m_chainman.GetConsensus()};
+    const int next_height_cs{tip ? tip->nHeight + 1 : 0};
+    if (Consensus::IsPQWitnessEnabled(consensusParams, next_height_cs)) {
+        currentBlockScriptVerifyFlags |= SCRIPT_VERIFY_PQ_WITNESS;
+    }
     if (!CheckInputsFromMempoolAndCache(tx, state, m_view, m_pool, currentBlockScriptVerifyFlags,
                                         ws.m_precomputed_txdata, m_active_chainstate.CoinsTip(), GetValidationCache())) {
         LogPrintf("BUG! PLEASE REPORT THIS! CheckInputScripts failed against latest-block but not STANDARD flags %s, %s\n", hash.ToString(), state.ToString());
@@ -2435,6 +2478,10 @@ static unsigned int GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
         flags |= SCRIPT_VERIFY_NULLDUMMY;
     }
 
+    if (Consensus::IsPQWitnessEnabled(consensusparams, block_index.nHeight)) {
+        flags |= SCRIPT_VERIFY_PQ_WITNESS;
+    }
+
     return flags;
 }
 
@@ -2625,6 +2672,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
 
     // Get the script flags for this block
     unsigned int flags{GetBlockScriptFlags(*pindex, m_chainman)};
+    const bool pq_sigops_active{DeploymentActiveAt(*pindex, m_chainman, Consensus::DEPLOYMENT_PQ_SIGOPS)};
 
     const auto time_2{SteadyClock::now()};
     m_chainman.time_forks += time_2 - time_1;
@@ -2692,7 +2740,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         // * legacy (always)
         // * p2sh (when P2SH enabled in flags and excludes coinbase)
         // * witness (when witness enabled in flags and excludes coinbase)
-        nSigOpsCost += GetTransactionSigOpCost(tx, view, flags);
+        nSigOpsCost += GetTransactionSigOpCost(tx, view, flags, pq_sigops_active);
         if (nSigOpsCost > MAX_BLOCK_SIGOPS_COST) {
             state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
             break;
@@ -3367,7 +3415,7 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex*
         if (!DisconnectTip(state, &disconnectpool)) {
             // This is likely a fatal error, but keep the mempool consistent,
             // just in case. Only remove from the mempool in this case.
-            MaybeUpdateMempoolForReorg(disconnectpool, false);
+            MaybeUpdateMempoolForReorg(disconnectpool, false, pindexOldTip);
 
             // If we're unable to disconnect a block during normal operation,
             // then that is a failure of our local system -- we should abort
@@ -3411,7 +3459,7 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex*
                     // A system error occurred (disk space, database error, ...).
                     // Make the mempool consistent with the current tip, just in case
                     // any observers try to use it before shutdown.
-                    MaybeUpdateMempoolForReorg(disconnectpool, false);
+                    MaybeUpdateMempoolForReorg(disconnectpool, false, pindexOldTip);
                     return false;
                 }
             } else {
@@ -3428,7 +3476,7 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex*
     if (fBlocksDisconnected) {
         // If any blocks were disconnected, disconnectpool may be non empty.  Add
         // any disconnected transactions back to the mempool.
-        MaybeUpdateMempoolForReorg(disconnectpool, true);
+        MaybeUpdateMempoolForReorg(disconnectpool, true, pindexOldTip);
     }
     if (m_mempool) m_mempool->check(this->CoinsTip(), this->m_chain.Height() + 1);
 
@@ -3739,7 +3787,7 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* pinde
         // transactions back to the mempool if disconnecting was successful,
         // and we're not doing a very deep invalidation (in which case
         // keeping the mempool up to date is probably futile anyway).
-        MaybeUpdateMempoolForReorg(disconnectpool, /* fAddToMempool = */ (++disconnected <= 10) && ret);
+        MaybeUpdateMempoolForReorg(disconnectpool, /* fAddToMempool = */ (++disconnected <= 10) && ret, invalid_walk_tip);
         if (!ret) return false;
         assert(invalid_walk_tip->pprev == m_chain.Tip());
 
@@ -4323,7 +4371,9 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     // large by filling up the coinbase witness, which doesn't change
     // the block hash, so we couldn't mark the block as permanently
     // failed).
-    if (GetBlockWeight(block) > MAX_BLOCK_WEIGHT) {
+    const Consensus::Params& cparams{chainman.GetConsensus()};
+    const int blk_wscale{GetWitnessDiscountScale(cparams, nHeight)};
+    if (GetBlockWeightWithScale(block, blk_wscale) > MAX_BLOCK_WEIGHT) {
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-weight", strprintf("%s : weight limit failed", __func__));
     }
 

@@ -321,7 +321,7 @@ public:
 };
 }
 
-static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPubKey, CScript::const_iterator pbegincodehash, CScript::const_iterator pend, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror, bool& fSuccess)
+static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPubKey, CScript::const_iterator pbegincodehash, CScript::const_iterator pend, ScriptExecutionData& execdata, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror, bool& fSuccess)
 {
     assert(sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0);
 
@@ -335,13 +335,25 @@ static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPu
             return set_error(serror, SCRIPT_ERR_SIG_FINDANDDELETE);
     }
 
-    if (!CheckSignatureEncoding(vchSig, flags, serror) || !CheckPubKeyEncoding(vchPubKey, flags, sigversion, serror)) {
-        //serror is set
-        return false;
+    if (vchPubKey.size() == DILITHIUM_PUBLICKEYBYTES && (flags & SCRIPT_VERIFY_PQ_WITNESS)) {
+        if (vchSig.empty()) {
+            fSuccess = false;
+            return true;
+        }
+        if (vchSig.size() != DILITHIUM_SIGNATUREBYTES + 1) {
+            return set_error(serror, SCRIPT_ERR_SIG_DER);
+        }
+        fSuccess = checker.CheckDilithiumSignature(vchSig, vchPubKey, scriptCode, sigversion, execdata, flags, serror);
+    } else {
+        if (!CheckSignatureEncoding(vchSig, flags, serror) || !CheckPubKeyEncoding(vchPubKey, flags, sigversion, serror)) {
+            //serror is set
+            return false;
+        }
+        fSuccess = checker.CheckECDSASignature(vchSig, vchPubKey, scriptCode, sigversion);
     }
-    fSuccess = checker.CheckECDSASignature(vchSig, vchPubKey, scriptCode, sigversion);
 
-    if (!fSuccess && (flags & SCRIPT_VERIFY_NULLFAIL) && vchSig.size())
+    if (!fSuccess && (flags & SCRIPT_VERIFY_NULLFAIL) && vchSig.size() &&
+        (serror == nullptr || *serror == SCRIPT_ERR_OK))
         return set_error(serror, SCRIPT_ERR_SIG_NULLFAIL);
 
     return true;
@@ -397,7 +409,8 @@ static bool EvalPQChecksigPreTapscript(
     const BaseSignatureChecker& checker,
     SigVersion sigversion,
     ScriptError* serror,
-    bool& success)
+    bool& success,
+    bool unified_dilithium_with_op_checksig)
 {
     assert(sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0);
 
@@ -420,7 +433,11 @@ if (vchSig.size() != DILITHIUM_SIGNATUREBYTES + 1) {
     success = !vchSig.empty();
 
     if (success) {
-        success = checker.CheckPQSignature(vchSig, vchPubKey, scriptCode, sigversion, execdata, serror);
+        if (unified_dilithium_with_op_checksig && (flags & SCRIPT_VERIFY_PQ_WITNESS)) {
+            success = checker.CheckDilithiumSignature(vchSig, vchPubKey, scriptCode, sigversion, execdata, flags, serror);
+        } else {
+            success = checker.CheckPQSignature(vchSig, vchPubKey, scriptCode, sigversion, execdata, serror);
+        }
     }
 
     // NULLFAIL applies only when signature check failed WITHOUT a specific script error.
@@ -443,7 +460,7 @@ static bool EvalChecksig(const valtype& sig, const valtype& pubkey, CScript::con
     switch (sigversion) {
     case SigVersion::BASE:
     case SigVersion::WITNESS_V0:
-        return EvalChecksigPreTapscript(sig, pubkey, pbegincodehash, pend, flags, checker, sigversion, serror, success);
+        return EvalChecksigPreTapscript(sig, pubkey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, success);
     case SigVersion::TAPSCRIPT:
         return EvalChecksigTapscript(sig, pubkey, execdata, flags, checker, sigversion, serror, success);
     case SigVersion::TAPROOT:
@@ -1119,23 +1136,19 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     valtype& vchSig    = stacktop(-2);
                     valtype& vchPubKey = stacktop(-1);
 
-                    // Subset of script starting at the most recent codeseparator
-                    CScript scriptCode(pbegincodehash, pend);
-
-                    // Drop the signature in pre-segwit scripts but not segwit scripts
-                    if (sigversion == SigVersion::BASE) {
-                        int found = FindAndDelete(scriptCode, CScript() << vchSig);
-                        if (found > 0 && (flags & SCRIPT_VERIFY_CONST_SCRIPTCODE))
-                            return set_error(serror, SCRIPT_ERR_SIG_FINDANDDELETE);
-                    }
-
                     bool fSuccess = true;
                     if (vchSig.size()) {
-                        if (!CheckSignatureEncoding(vchSig, flags, serror) || !CheckPubKeyEncoding(vchPubKey, flags, sigversion, serror)) {
-                            // serror is set
-                            return false;
+                        if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) {
+                            if (!EvalChecksigPreTapscript(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, fSuccess))
+                                return false;
+                        } else {
+                            assert(sigversion == SigVersion::TAPSCRIPT);
+                            CScript scriptCode(pbegincodehash, pend);
+                            if (!CheckSignatureEncoding(vchSig, flags, serror) || !CheckPubKeyEncoding(vchPubKey, flags, sigversion, serror)) {
+                                return false;
+                            }
+                            fSuccess = checker.CheckECDSASignature(vchSig, vchPubKey, scriptCode, sigversion);
                         }
-                        fSuccess = checker.CheckECDSASignature(vchSig, vchPubKey, scriptCode, sigversion);
                     }
 
                     popstack(stack);
@@ -1178,7 +1191,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         // Use EvalPQChecksigPreTapscript for PQ/Dilithium signature verification
                         // It handles size validation, FindAndDelete (for scriptCode it builds internally), and PQ signature check
                         bool pqSuccess = false;
-                        if (!EvalPQChecksigPreTapscript(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, pqSuccess)) {
+                        if (!EvalPQChecksigPreTapscript(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, pqSuccess, /*unified_dilithium_with_op_checksig=*/true)) {
                             // EvalPQChecksigPreTapscript returned false, meaning an error occurred
                             // serror is already set by EvalPQChecksigPreTapscript
                             return false;
@@ -1387,10 +1400,12 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         if (vchSig.size() != DILITHIUM_SIGNATUREBYTES + 1) {
                             return set_error(serror, SCRIPT_ERR_SIG_DER);
                         }
-                        // Validate hashtype byte
-                        unsigned char nHashType = vchSig.back();
-                        if (nHashType != 0x01) {  // Only SIGHASH_ALL supported for MVP
-                            return set_error(serror, SCRIPT_ERR_SIG_HASHTYPE);
+                        // Validate hashtype byte (MVP) unless unified Dilithium rules apply post-activation
+                        if ((flags & SCRIPT_VERIFY_PQ_WITNESS) == 0) {
+                            unsigned char nHashType = vchSig.back();
+                            if (nHashType != 0x01) {  // Only SIGHASH_ALL supported for MVP
+                                return set_error(serror, SCRIPT_ERR_SIG_HASHTYPE);
+                            }
                         }
                         // Format sanity check: reject all-zero signatures
                         bool all_zero = true;
@@ -1428,7 +1443,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                             // Use PQ verification function
                             // EvalPQChecksigPreTapscript handles NULLFAIL internally
                             bool pqSuccess = false;
-                            if (!EvalPQChecksigPreTapscript(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, pqSuccess)) {
+                            if (!EvalPQChecksigPreTapscript(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, pqSuccess, /*unified_dilithium_with_op_checksig=*/true)) {
                                 // EvalPQChecksigPreTapscript returned false, meaning an error occurred
                                 // serror is already set by EvalPQChecksigPreTapscript (may include NULLFAIL)
                                 return false;
@@ -1504,7 +1519,8 @@ case OP_PQCHECKSIGVERIFY:
             checker,
             sigversion,
             serror,
-            fSuccess)) {
+            fSuccess,
+            /*unified_dilithium_with_op_checksig=*/false)) {
         return false;
     }
 
@@ -1547,7 +1563,8 @@ case OP_PQCHECKSIGADD:
             checker,
             sigversion,
             serror,
-            fSuccess)) {
+            fSuccess,
+            /*unified_dilithium_with_op_checksig=*/false)) {
         return false;
     }
 
@@ -2134,8 +2151,6 @@ bool GenericTransactionSignatureChecker<T>::CheckECDSASignature(const std::vecto
 }
 
 
-#include "crypto/dilithium.h" // DILITHIUM_* + PQ_Verify
-
 template <class T>
 bool GenericTransactionSignatureChecker<T>::CheckPQSignature(
     const std::vector<unsigned char>& vchSigIn,
@@ -2210,6 +2225,56 @@ if (nHashType & ~(SIGHASH_ALL | SIGHASH_NONE | SIGHASH_SINGLE | SIGHASH_ANYONECA
     // (so we do NOT overwrite *serror here).
     return PQ_Verify(sig_no_hashtype, msg, vchPubKey);
 }
+
+template <class T>
+bool GenericTransactionSignatureChecker<T>::CheckDilithiumSignature(
+    const std::vector<unsigned char>& vchSigIn,
+    const std::vector<unsigned char>& vchPubKey,
+    const CScript& scriptCode,
+    SigVersion sigversion,
+    ScriptExecutionData& execdata,
+    unsigned int flags,
+    ScriptError* serror) const
+{
+    (void)execdata;
+
+    if (vchPubKey.size() != DILITHIUM_PUBLICKEYBYTES) {
+        return set_error(serror, SCRIPT_ERR_PUBKEYTYPE);
+    }
+    if (vchSigIn.size() != DILITHIUM_SIGNATUREBYTES + 1) {
+        return set_error(serror, SCRIPT_ERR_SIG_DER);
+    }
+
+    const unsigned char nHashType = vchSigIn.back();
+    std::vector<unsigned char> sig_no_hashtype(vchSigIn.begin(), vchSigIn.end() - 1);
+
+    if ((flags & SCRIPT_VERIFY_STRICTENC) != 0 && !IsDefinedHashtypeSignature(vchSigIn)) {
+        return set_error(serror, SCRIPT_ERR_SIG_HASHTYPE);
+    }
+
+    if (sigversion == SigVersion::WITNESS_V0 && amount < 0) {
+        return HandleMissingData(m_mdb);
+    }
+
+    if (sigversion == SigVersion::TAPSCRIPT || sigversion == SigVersion::TAPROOT) {
+        return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+    }
+
+    auto is_all_zero = [](const std::vector<unsigned char>& v) {
+        for (unsigned char c : v)
+            if (c != 0) return false;
+        return true;
+    };
+    if (is_all_zero(vchPubKey) || is_all_zero(sig_no_hashtype)) {
+        return set_error(serror, SCRIPT_ERR_SIG_DER);
+    }
+
+    const uint256 sighash = SignatureHash(scriptCode, *txTo, nIn, static_cast<int32_t>(nHashType), amount, sigversion, this->txdata);
+    std::vector<unsigned char> msg(sighash.begin(), sighash.end());
+
+    return PQ_Verify(sig_no_hashtype, msg, vchPubKey);
+}
+
 template <class T>
 bool GenericTransactionSignatureChecker<T>::CheckSchnorrSignature(std::span<const unsigned char> sig, std::span<const unsigned char> pubkey_in, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror) const
 {
@@ -2436,11 +2501,21 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
             if (stack.size() != 2) {
                 return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH); // 2 items in witness
             }
-            exec_script << OP_DUP << OP_HASH160 << program << OP_EQUALVERIFY << OP_PQCHECKSIG;
+            exec_script << OP_DUP << OP_HASH160 << program << OP_EQUALVERIFY << OP_CHECKSIG;
             return ExecuteWitnessScript(stack, exec_script, flags, SigVersion::WITNESS_V0, checker, execdata, serror);
         } else {
             return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_WRONG_LENGTH);
         }
+    } else if (witversion == 2 && program.size() == WITNESS_V0_KEYHASH_SIZE) {
+        // Native Dilithium/PQ witness keyhash: OP_2 <20-byte Hash160(pubkey)>
+        if ((flags & SCRIPT_VERIFY_PQ_WITNESS) == 0) {
+            return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM);
+        }
+        if (stack.size() != 2) {
+            return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH); // [signature, pubkey]
+        }
+        exec_script << OP_DUP << OP_HASH160 << program << OP_EQUALVERIFY << OP_CHECKSIG;
+        return ExecuteWitnessScript(stack, exec_script, flags, SigVersion::WITNESS_V0, checker, execdata, serror);
     } else if (witversion == 1 && program.size() == WITNESS_V1_TAPROOT_SIZE && !is_p2sh) {
         // BIP341 Taproot: 32-byte non-P2SH witness v1 program (which encodes a P2C-tweaked pubkey)
         if (!(flags & SCRIPT_VERIFY_TAPROOT)) return set_success(serror);
@@ -2617,7 +2692,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
     return set_success(serror);
 }
 
-size_t static WitnessSigOps(int witversion, const std::vector<unsigned char>& witprogram, const CScriptWitness& witness)
+size_t static WitnessSigOps(int witversion, const std::vector<unsigned char>& witprogram, const CScriptWitness& witness, bool pq_sigops_active)
 {
     if (witversion == 0) {
         if (witprogram.size() == WITNESS_V0_KEYHASH_SIZE)
@@ -2625,7 +2700,7 @@ size_t static WitnessSigOps(int witversion, const std::vector<unsigned char>& wi
 
         if (witprogram.size() == WITNESS_V0_SCRIPTHASH_SIZE && witness.stack.size() > 0) {
             CScript subscript(witness.stack.back().begin(), witness.stack.back().end());
-            return subscript.GetSigOpCount(true);
+            return subscript.GetSigOpCount(true, pq_sigops_active);
         }
     }
 
@@ -2633,7 +2708,7 @@ size_t static WitnessSigOps(int witversion, const std::vector<unsigned char>& wi
     return 0;
 }
 
-size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, unsigned int flags)
+size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, unsigned int flags, bool pq_sigops_active)
 {
     static const CScriptWitness witnessEmpty;
 
@@ -2645,7 +2720,7 @@ size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey,
     int witnessversion;
     std::vector<unsigned char> witnessprogram;
     if (scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram)) {
-        return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty);
+        return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty, pq_sigops_active);
     }
 
     if (scriptPubKey.IsPayToScriptHash() && scriptSig.IsPushOnly()) {
@@ -2657,7 +2732,7 @@ size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey,
         }
         CScript subscript(data.begin(), data.end());
         if (subscript.IsWitnessProgram(witnessversion, witnessprogram)) {
-            return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty);
+            return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty, pq_sigops_active);
         }
     }
 

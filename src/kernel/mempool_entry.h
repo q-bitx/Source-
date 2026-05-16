@@ -6,6 +6,7 @@
 #define BITCOIN_KERNEL_MEMPOOL_ENTRY_H
 
 #include <consensus/amount.h>
+#include <consensus/consensus.h>
 #include <consensus/validation.h>
 #include <core_memusage.h>
 #include <policy/policy.h>
@@ -81,6 +82,7 @@ private:
     mutable Children m_children;
     const CAmount nFee;             //!< Cached to avoid expensive parent-transaction lookups
     const int32_t nTxWeight;         //!< ... and avoid recomputing tx weight (also used for GetTxSize())
+    const int m_witness_discount_scale; //!< BIP141 discount k used for nTxWeight / vsize (4 pre-PQ-witness, 16 after)
     const size_t nUsageSize;        //!< ... and total memory usage
     const int64_t nTime;            //!< Local time when entering the mempool
     const uint64_t entry_sequence;  //!< Sequence number used to determine whether this transaction is too recent for relay
@@ -109,10 +111,12 @@ public:
     CTxMemPoolEntry(const CTransactionRef& tx, CAmount fee,
                     int64_t time, unsigned int entry_height, uint64_t entry_sequence,
                     bool spends_coinbase,
-                    int64_t sigops_cost, LockPoints lp)
+                    int64_t sigops_cost, LockPoints lp,
+                    int witness_discount_scale = WITNESS_SCALE_FACTOR)
         : tx{tx},
           nFee{fee},
-          nTxWeight{GetTransactionWeight(*tx)},
+          nTxWeight{GetTransactionWeightWithScale(*tx, witness_discount_scale)},
+          m_witness_discount_scale{witness_discount_scale},
           nUsageSize{RecursiveDynamicUsage(tx)},
           nTime{time},
           entry_sequence{entry_sequence},
@@ -139,9 +143,10 @@ public:
     const CAmount& GetFee() const { return nFee; }
     int32_t GetTxSize() const
     {
-        return GetVirtualTransactionSize(nTxWeight, sigOpCost, ::nBytesPerSigOp);
+        return GetVirtualTransactionSize(nTxWeight, sigOpCost, ::nBytesPerSigOp, m_witness_discount_scale);
     }
     int32_t GetTxWeight() const { return nTxWeight; }
+    int GetWitnessDiscountScale() const { return m_witness_discount_scale; }
     std::chrono::seconds GetTime() const { return std::chrono::seconds{nTime}; }
     unsigned int GetHeight() const { return entryHeight; }
     uint64_t GetSequence() const { return entry_sequence; }

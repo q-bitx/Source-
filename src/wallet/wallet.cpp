@@ -17,7 +17,9 @@
 #include <common/system.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
+#include <consensus/params.h>
 #include <consensus/validation.h>
+#include <chainparams.h>
 #include <external_signer.h>
 #include <interfaces/chain.h>
 #include <interfaces/handler.h>
@@ -1642,6 +1644,10 @@ CAmount CWallet::GetDebit(const CTxIn &txin, const isminefilter& filter) const
 static bool HaveDilithiumKeyInAnySPKM(const CWallet* pwallet, const CKeyID& keyid)
 {
     AssertLockHeld(pwallet->cs_wallet);
+    // Legacy (non-descriptor) wallets store Dilithium keys on CWallet.
+    if (pwallet->map_dilithium_priv.count(keyid) > 0) {
+        return true;
+    }
     for (ScriptPubKeyMan* spkm : pwallet->GetAllScriptPubKeyMans()) {
         DescriptorScriptPubKeyMan* desc_spkm = dynamic_cast<DescriptorScriptPubKeyMan*>(spkm);
         if (desc_spkm) {
@@ -1678,7 +1684,14 @@ isminetype CWallet::IsMine(const CTxDestination& dest) const
         }
         return ISMINE_NO;
     }
-    
+    if (const DilithiumWitnessV0KeyHash* dil_wkh = std::get_if<DilithiumWitnessV0KeyHash>(&dest)) {
+        CKeyID keyid = CKeyID(uint160(*dil_wkh));
+        if (HaveDilithiumKeyInAnySPKM(this, keyid)) {
+            return ISMINE_SPENDABLE;
+        }
+        return ISMINE_NO;
+    }
+
     return IsMine(GetScriptForDestination(dest));
 }
 
@@ -1691,6 +1704,13 @@ isminetype CWallet::IsMine(const CScript& script) const
     std::vector<valtype> solutions;
     TxoutType whichType = Solver(script, solutions);
     if (whichType == TxoutType::DILITHIUM_PUBKEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        CKeyID keyid = CKeyID(uint160(solutions[0]));
+        if (HaveDilithiumKeyInAnySPKM(this, keyid)) {
+            return ISMINE_SPENDABLE;
+        }
+    }
+    // Native PQ witness (OP_2 <20-byte program>): same Dilithium key material as legacy P2PKH-style PQ.
+    if (whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
         CKeyID keyid = CKeyID(uint160(solutions[0]));
         if (HaveDilithiumKeyInAnySPKM(this, keyid)) {
             return ISMINE_SPENDABLE;
@@ -2326,11 +2346,18 @@ bool CWallet::SetPQPrivateKey(const PQPrivateKey& key_in) {
 }
 bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const
 {
+    bool pq_witness_program_templates = false;
+    if (HaveChain()) {
+        if (const std::optional<int> h = chain().getHeight();
+            h.has_value() && Consensus::IsPQWitnessEnabled(Params().GetConsensus(), *h + 1)) {
+            pq_witness_program_templates = true;
+        }
+    }
     // Try to sign with all ScriptPubKeyMans
     for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
         // spk_man->SignTransaction will return true if the transaction is complete,
         // so we can exit early and return true if that happens
-        if (spk_man->SignTransaction(tx, coins, sighash, input_errors)) {
+        if (spk_man->SignTransaction(tx, coins, sighash, input_errors, pq_witness_program_templates)) {
             return true;
         }
     }
@@ -2367,11 +2394,18 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbtx, bo
     }
 
     const PrecomputedTransactionData txdata = PrecomputePSBTData(psbtx);
+    bool pq_witness_program_templates = false;
+    if (HaveChain()) {
+        if (const std::optional<int> h = chain().getHeight();
+            h.has_value() && Consensus::IsPQWitnessEnabled(Params().GetConsensus(), *h + 1)) {
+            pq_witness_program_templates = true;
+        }
+    }
 
     // Fill in information from ScriptPubKeyMans
     for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
         int n_signed_this_spkm = 0;
-        const auto error{spk_man->FillPSBT(psbtx, txdata, sighash_type, sign, bip32derivs, &n_signed_this_spkm, finalize)};
+        const auto error{spk_man->FillPSBT(psbtx, txdata, sighash_type, sign, bip32derivs, &n_signed_this_spkm, finalize, pq_witness_program_templates)};
         if (error) {
             return error;
         }
@@ -2720,8 +2754,8 @@ util::Result<CTxDestination> CWallet::GetNewDestination(const OutputType type, c
 {
     LOCK(cs_wallet);
     
-    // Handle Dilithium types
-    if (type == OutputType::DILITHIUM_LEGACY) {
+    // Handle Dilithium types (legacy P2PKH-style and native PQ witness share key material)
+    if (type == OutputType::DILITHIUM_LEGACY || type == OutputType::DILITHIUM_BECH32) {
         // Generate Dilithium keypair using crypto/dilithium.h interface
         valtype pubkey_bytes, privkey_bytes;
         if (!PQ_GenerateKeypair(pubkey_bytes, privkey_bytes)) {
@@ -2738,12 +2772,25 @@ util::Result<CTxDestination> CWallet::GetNewDestination(const OutputType type, c
         CKeyID keyid = CKeyID(keyid_hash);
         
         if (IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS)) {
-            // For descriptor wallets, use DescriptorScriptPubKeyMan
-            auto spk_man = GetScriptPubKeyMan(type, /*internal=*/false);
+            // Dilithium legacy and native witness share the same DescriptorScriptPubKeyMan key storage.
+            // Prefer an existing active manager for either type so we never create a second empty
+            // DescriptorScriptPubKeyMan: default WalletDescriptor::id is zero, so two such managers
+            // would share GetID() and the second AddScriptPubKeyMan would overwrite the first in
+            // m_spk_managers, leaving stale pointers in m_external_spk_managers (crash).
+            ScriptPubKeyMan* spk_man = GetScriptPubKeyMan(type, /*internal=*/false);
+            const OutputType dilithium_sibling_type =
+                (type == OutputType::DILITHIUM_LEGACY) ? OutputType::DILITHIUM_BECH32 : OutputType::DILITHIUM_LEGACY;
             if (!spk_man) {
-                // Create a DescriptorScriptPubKeyMan on-demand for Dilithium types
+                spk_man = GetScriptPubKeyMan(dilithium_sibling_type, /*internal=*/false);
+            }
+            if (!spk_man) {
                 WalletBatch batch(GetDatabase());
                 auto spk_manager = std::unique_ptr<DescriptorScriptPubKeyMan>(new DescriptorScriptPubKeyMan(*this, m_keypool_size));
+                uint256 unique_id;
+                do {
+                    unique_id = GetRandHash();
+                } while (m_spk_managers.count(unique_id) > 0);
+                spk_manager->SetPlaceholderDescriptorId(unique_id);
                 if (IsCrypted()) {
                     if (IsLocked()) {
                         return util::Error{_("Error: Wallet is locked, cannot create Dilithium address")};
@@ -2757,6 +2804,12 @@ util::Result<CTxDestination> CWallet::GetNewDestination(const OutputType type, c
                 AddScriptPubKeyMan(id, std::move(spk_manager));
                 AddActiveScriptPubKeyManWithDb(batch, id, type, /*internal=*/false);
                 spk_man = out;
+            }
+            // If we reused the sibling Dilithium manager, activate this OutputType to the same id
+            // so wallet reload maps both dilithium-legacy and dilithium-bech32 correctly.
+            if (GetScriptPubKeyMan(type, /*internal=*/false) != spk_man) {
+                WalletBatch act_batch(GetDatabase());
+                AddActiveScriptPubKeyManWithDb(act_batch, spk_man->GetID(), type, /*internal=*/false);
             }
             DescriptorScriptPubKeyMan* desc_spk_man = dynamic_cast<DescriptorScriptPubKeyMan*>(spk_man);
             if (!desc_spk_man) {
@@ -2779,8 +2832,9 @@ util::Result<CTxDestination> CWallet::GetNewDestination(const OutputType type, c
             }
         }
         
-        // Create destination
-        CTxDestination dest = DilithiumPKHash(keyid_hash);
+        const CTxDestination dest = (type == OutputType::DILITHIUM_LEGACY)
+            ? CTxDestination(DilithiumPKHash(keyid_hash))
+            : CTxDestination(DilithiumWitnessV0KeyHash(dilithium_pubkey));
         SetAddressBook(dest, label, AddressPurpose::RECEIVE);
         return dest;
     }

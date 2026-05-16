@@ -28,9 +28,12 @@ add_subdirectory(
 add_executable(pq_tests
   main.cpp
   dilithium_tests.cpp
+  pq_sigopcount_tests.cpp
+  pq_sigop_pipeline_tests.cpp
   pq_verifyscript_tests.cpp
   pq_solver_policy_tests.cpp
   pq_sigpolicy_reject_tests.cpp
+  pq_witness_activation_tests.cpp
 
   # Dilithium (C)
   ../../crypto/dilithium/sign.c
@@ -55,13 +58,34 @@ add_executable(pq_tests
   ../../script/solver.cpp
   ../../script/standard.cpp
   ../../uint256.cpp
+  ../../arith_uint256.cpp
 
   # helpers needed by standard.cpp (Encode/DecodeBase58Check)
   ../../base58.cpp
 
   # misc
   ../../crypto/siphash.cpp
+  ../../crypto/chacha20.cpp
   ../../policy/feerate.cpp
+
+  ../../consensus/tx_verify.cpp
+  ../../coins.cpp
+  ../../chain.cpp
+  ../../util/moneystr.cpp
+  ../../util/check.cpp
+  ../../util/hasher.cpp
+  ../../logging.cpp
+  ../../random.cpp
+  ../../clientversion.cpp
+  ../../util/time.cpp
+  ../../util/threadnames.cpp
+  ../../sync.cpp
+  ../../util/fs.cpp
+  ../../util/fs_helpers.cpp
+  ../../util/syserror.cpp
+  ../../randomenv.cpp
+  ../../support/cleanse.cpp
+  ../../support/lockedpool.cpp
 )
 
 target_sources(pq_tests PRIVATE
@@ -85,6 +109,7 @@ target_include_directories(pq_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../crypto
   ${CMAKE_CURRENT_SOURCE_DIR}/../../crypto/dilithium
   ${CMAKE_CURRENT_SOURCE_DIR}/../../secp256k1/include
+  ${PROJECT_BINARY_DIR}                            # bitcoin-build-config.h (top-level CMake binary dir)
 )
 
 # link to the actual secp256k1 target (name can differ)
@@ -156,6 +181,7 @@ target_include_directories(pq_multisig_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../crypto
   ${CMAKE_CURRENT_SOURCE_DIR}/../../crypto/dilithium
   ${CMAKE_CURRENT_SOURCE_DIR}/../../secp256k1/include
+  ${PROJECT_BINARY_DIR}                            # bitcoin-build-config.h (top-level CMake binary dir)
 )
 
 # link to secp256k1 (reuse same target as pq_tests)

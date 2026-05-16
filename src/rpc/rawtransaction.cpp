@@ -44,6 +44,7 @@
 #include "script/standard.h"
 
 #include <numeric>
+#include <optional>
 #include <stdint.h>
 
 #include <univalue.h>
@@ -59,12 +60,20 @@ static void TxToJSON(const CTransaction& tx, const uint256 hashBlock, UniValue& 
                      TxVerbosity verbosity = TxVerbosity::SHOW_DETAILS)
 {
     CHECK_NONFATAL(verbosity >= TxVerbosity::SHOW_DETAILS);
+    std::optional<int> witness_discount_scale;
+    if (!hashBlock.IsNull()) {
+        LOCK(cs_main);
+        const CBlockIndex* pindex = active_chainstate.m_blockman.LookupBlockIndex(hashBlock);
+        if (pindex) {
+            witness_discount_scale = GetWitnessDiscountScale(active_chainstate.m_chainman.GetConsensus(), pindex->nHeight);
+        }
+    }
     // Call into TxToUniv() in bitcoin-common to decode the transaction hex.
     //
     // Blockchain contextual information (confirmations and blocktime) is not
     // available to code in bitcoin-common, so we query them here and push the
     // data into the returned UniValue.
-    TxToUniv(tx, /*block_hash=*/uint256(), entry, /*include_hex=*/true, txundo, verbosity);
+    TxToUniv(tx, /*block_hash=*/uint256(), entry, /*include_hex=*/true, txundo, verbosity, witness_discount_scale);
 
     if (!hashBlock.IsNull()) {
         LOCK(cs_main);
@@ -88,9 +97,15 @@ static std::vector<RPCResult> DecodeTxDoc(const std::string& txid_field_doc)
     return {
         {RPCResult::Type::STR_HEX, "txid", txid_field_doc},
         {RPCResult::Type::STR_HEX, "hash", "The transaction hash (differs from txid for witness transactions)"},
-        {RPCResult::Type::NUM, "size", "The serialized transaction size"},
-        {RPCResult::Type::NUM, "vsize", "The virtual transaction size (differs from size for witness transactions)"},
-        {RPCResult::Type::NUM, "weight", "The transaction's weight (between vsize*4-3 and vsize*4)"},
+        {RPCResult::Type::NUM, "size", "The serialized transaction size including witness data"},
+        {RPCResult::Type::NUM, "strippedsize", "The serialized transaction size excluding witness data"},
+        {RPCResult::Type::NUM, "vsize", "Virtual size using BIP141 discount (k=4) when the confirming block is unknown; when known, uses that block height's witness discount scale (k=4 pre-PQ witness, k=16 after)"},
+        {RPCResult::Type::NUM, "weight", "Transaction weight consistent with vsize and the active discount scale"},
+        {RPCResult::Type::NUM, "witness_discount_scale", /*optional=*/true, "Present when the confirming block is known: witness discount k used for weight/vsize (same as consensus for that height)"},
+        {RPCResult::Type::NUM, "bip141_weight", /*optional=*/true, "Legacy BIP141 (k=4) weight when witness_discount_scale > 4"},
+        {RPCResult::Type::NUM, "bip141_vsize", /*optional=*/true, "Legacy BIP141 (k=4) virtual size when witness_discount_scale > 4"},
+        {RPCResult::Type::NUM, "pq_weight", /*optional=*/true, "Same as weight when witness_discount_scale > 4"},
+        {RPCResult::Type::NUM, "pq_vsize", /*optional=*/true, "Same as vsize when witness_discount_scale > 4"},
         {RPCResult::Type::NUM, "version", "The version"},
         {RPCResult::Type::NUM_TIME, "locktime", "The lock time"},
         {RPCResult::Type::ARR, "vin", "",

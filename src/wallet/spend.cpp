@@ -8,7 +8,9 @@
 #include <common/system.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
+#include <consensus/params.h>
 #include <consensus/validation.h>
+#include <chainparams.h>
 #include <interfaces/chain.h>
 #include <serialize.h>
 #include <node/types.h>
@@ -92,7 +94,8 @@ static bool UseMaxSig(const std::optional<CTxIn>& txin, const CCoinControl* coin
  */
 static std::optional<int64_t> MaxInputWeight(const Descriptor& desc, const std::optional<CTxIn>& txin,
                                              const CCoinControl* coin_control, const bool tx_is_segwit,
-                                             const bool can_grind_r) {
+                                             const bool can_grind_r,
+                                             int witness_discount_scale) {
     if (const auto sat_weight = desc.MaxSatisfactionWeight(!can_grind_r || UseMaxSig(txin, coin_control))) {
         if (const auto elems_count = desc.MaxSatisfactionElems()) {
             const bool is_segwit = IsSegwit(desc);
@@ -102,24 +105,24 @@ static std::optional<int64_t> MaxInputWeight(const Descriptor& desc, const std::
             // NOTE: this also works in case of mixed scriptsig-and-witness such as in p2sh-wrapped segwit v0
             // outputs. In this case the size of the scriptsig length will always be one (since the redeemScript
             // is always a push of the witness program in this case, which is smaller than 253 bytes).
-            const int64_t scriptsig_len = is_segwit ? 1 : GetSizeOfCompactSize(*sat_weight / WITNESS_SCALE_FACTOR);
+            const int64_t scriptsig_len = is_segwit ? 1 : GetSizeOfCompactSize(*sat_weight / witness_discount_scale);
             const int64_t witstack_len = is_segwit ? GetSizeOfCompactSize(*elems_count) : (tx_is_segwit ? 1 : 0);
             // previous txid + previous vout + sequence + scriptsig len + witstack size + scriptsig or witness
             // NOTE: sat_weight already accounts for the witness discount accordingly.
-            return (32 + 4 + 4 + scriptsig_len) * WITNESS_SCALE_FACTOR + witstack_len + *sat_weight;
+            return (32 + 4 + 4 + scriptsig_len) * witness_discount_scale + witstack_len + *sat_weight;
         }
     }
 
     return {};
 }
 
-int CalculateMaximumSignedInputSize(const CTxOut& txout, const COutPoint outpoint, const SigningProvider* provider, bool can_grind_r, const CCoinControl* coin_control)
+int CalculateMaximumSignedInputSize(const CTxOut& txout, const COutPoint outpoint, const SigningProvider* provider, bool can_grind_r, const CCoinControl* coin_control, int witness_discount_scale)
 {
     if (!provider) return -1;
 
     if (const auto desc = InferDescriptor(txout.scriptPubKey, *provider)) {
-        if (const auto weight = MaxInputWeight(*desc, {}, coin_control, true, can_grind_r)) {
-            return static_cast<int>(GetVirtualTransactionSize(*weight, 0, 0));
+        if (const auto weight = MaxInputWeight(*desc, {}, coin_control, true, can_grind_r, witness_discount_scale)) {
+            return static_cast<int>(GetVirtualTransactionSize(*weight, 0, 0, witness_discount_scale));
         }
     }
 
@@ -142,19 +145,37 @@ int CalculateMaximumSignedInputSize(const CTxOut& txout, const COutPoint outpoin
                 const int64_t scriptsig_len_varint = GetSizeOfCompactSize(scriptsig_len);
                 // previous txid (32) + previous vout (4) + sequence (4) + scriptsig len varint + scriptsig
                 // Not segwit, so no witness discount
-                const int64_t input_weight = (32 + 4 + 4 + scriptsig_len_varint + scriptsig_len) * WITNESS_SCALE_FACTOR;
-                return static_cast<int>(GetVirtualTransactionSize(input_weight, 0, 0));
+                const int64_t input_weight = (32 + 4 + 4 + scriptsig_len_varint + scriptsig_len) * witness_discount_scale;
+                return static_cast<int>(GetVirtualTransactionSize(input_weight, 0, 0, witness_discount_scale));
             }
+        }
+    }
+    if (whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        DilithiumPKHash dilPkhash{uint160(solutions[0])};
+        CDilithiumPubKey dilPubKey;
+        if (provider->GetDilithiumPubKey(dilPkhash, dilPubKey)) {
+            // Native PQ witness: empty scriptSig, witness stack <sig> <pubkey> (same payloads as P2PKH-style PQ).
+            const int64_t sig_size = DILITHIUM_SIGNATUREBYTES + 1;
+            const int64_t pubkey_size = DILITHIUM_PUBLICKEYBYTES;
+            const int64_t sig_push_overhead = (sig_size > 255) ? 3 : (sig_size > 75) ? 2 : 1;
+            const int64_t pubkey_push_overhead = (pubkey_size > 255) ? 3 : (pubkey_size > 75) ? 2 : 1;
+            const int64_t w_sig = sig_push_overhead + sig_size;
+            const int64_t w_pk = pubkey_push_overhead + pubkey_size;
+            const int64_t witstack_elems = GetSizeOfCompactSize(2);
+            const int64_t sat_weight = w_sig + w_pk;
+            const int64_t scriptsig_len = 1;
+            const int64_t input_weight = (32 + 4 + 4 + scriptsig_len) * witness_discount_scale + witstack_elems + sat_weight;
+            return static_cast<int>(GetVirtualTransactionSize(input_weight, 0, 0, witness_discount_scale));
         }
     }
 
     return -1;
 }
 
-int CalculateMaximumSignedInputSize(const CTxOut& txout, const CWallet* wallet, const CCoinControl* coin_control)
+int CalculateMaximumSignedInputSize(const CTxOut& txout, const CWallet* wallet, const CCoinControl* coin_control, int witness_discount_scale)
 {
     const std::unique_ptr<SigningProvider> provider = wallet->GetSolvingProvider(txout.scriptPubKey);
-    return CalculateMaximumSignedInputSize(txout, COutPoint(), provider.get(), wallet->CanGrindR(), coin_control);
+    return CalculateMaximumSignedInputSize(txout, COutPoint(), provider.get(), wallet->CanGrindR(), coin_control, witness_discount_scale);
 }
 
 /** Infer a descriptor for the given output script. */
@@ -174,7 +195,8 @@ static std::unique_ptr<Descriptor> GetDescriptor(const CWallet* wallet, const CC
 /** Infer the maximum size of this input after it will be signed. */
 static std::optional<int64_t> GetSignedTxinWeight(const CWallet* wallet, const CCoinControl* coin_control,
                                                   const CTxIn& txin, const CTxOut& txo, const bool tx_is_segwit,
-                                                  const bool can_grind_r)
+                                                  const bool can_grind_r,
+                                                  int witness_discount_scale)
 {
     // If weight was provided, use that.
     std::optional<int64_t> weight;
@@ -184,7 +206,7 @@ static std::optional<int64_t> GetSignedTxinWeight(const CWallet* wallet, const C
 
     // Otherwise, use the maximum satisfaction size provided by the descriptor.
     std::unique_ptr<Descriptor> desc{GetDescriptor(wallet, coin_control, txo.scriptPubKey)};
-    if (desc) return MaxInputWeight(*desc, {txin}, coin_control, tx_is_segwit, can_grind_r);
+    if (desc) return MaxInputWeight(*desc, {txin}, coin_control, tx_is_segwit, can_grind_r, witness_discount_scale);
 
     // Fallback for Dilithium outputs: estimate size without descriptor
     std::vector<std::vector<unsigned char>> solutions;
@@ -202,43 +224,56 @@ static std::optional<int64_t> GetSignedTxinWeight(const CWallet* wallet, const C
         const int64_t scriptsig_len_varint = GetSizeOfCompactSize(scriptsig_len);
         // previous txid (32) + previous vout (4) + sequence (4) + scriptsig len varint + scriptsig
         // Not segwit, so no witness discount
-        return (32 + 4 + 4 + scriptsig_len_varint + scriptsig_len) * WITNESS_SCALE_FACTOR;
+        return (32 + 4 + 4 + scriptsig_len_varint + scriptsig_len) * witness_discount_scale;
+    }
+    if (whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        const int64_t sig_size = DILITHIUM_SIGNATUREBYTES + 1;
+        const int64_t pubkey_size = DILITHIUM_PUBLICKEYBYTES;
+        const int64_t sig_push_overhead = (sig_size > 255) ? 3 : (sig_size > 75) ? 2 : 1;
+        const int64_t pubkey_push_overhead = (pubkey_size > 255) ? 3 : (pubkey_size > 75) ? 2 : 1;
+        const int64_t w_sig = sig_push_overhead + sig_size;
+        const int64_t w_pk = pubkey_push_overhead + pubkey_size;
+        const int64_t witstack_elems = GetSizeOfCompactSize(2);
+        const int64_t sat_weight = w_sig + w_pk;
+        const int64_t scriptsig_len = 1;
+        return (32 + 4 + 4 + scriptsig_len) * witness_discount_scale + witstack_elems + sat_weight;
     }
 
     return {};
 }
 
 // txouts needs to be in the order of tx.vin
-TxSize CalculateMaximumSignedTxSize(const CTransaction &tx, const CWallet *wallet, const std::vector<CTxOut>& txouts, const CCoinControl* coin_control)
+TxSize CalculateMaximumSignedTxSize(const CTransaction &tx, const CWallet *wallet, const std::vector<CTxOut>& txouts, const CCoinControl* coin_control, int witness_discount_scale)
 {
     // version + nLockTime + input count + output count
-    int64_t weight = (4 + 4 + GetSizeOfCompactSize(tx.vin.size()) + GetSizeOfCompactSize(tx.vout.size())) * WITNESS_SCALE_FACTOR;
+    int64_t weight = (4 + 4 + GetSizeOfCompactSize(tx.vin.size()) + GetSizeOfCompactSize(tx.vout.size())) * witness_discount_scale;
     // Whether any input spends a witness program. Necessary to run before the next loop over the
     // inputs in order to accurately compute the compactSize length for the witness data per input.
     bool is_segwit = std::any_of(txouts.begin(), txouts.end(), [&](const CTxOut& txo) {
         std::unique_ptr<Descriptor> desc{GetDescriptor(wallet, coin_control, txo.scriptPubKey)};
         if (desc) return IsSegwit(*desc);
-        return false;
+        std::vector<std::vector<unsigned char>> pq_sol;
+        return Solver(txo.scriptPubKey, pq_sol) == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH;
     });
     // Segwit marker and flag
     if (is_segwit) weight += 2;
 
     // Add the size of the transaction outputs.
-    for (const auto& txo : tx.vout) weight += GetSerializeSize(txo) * WITNESS_SCALE_FACTOR;
+    for (const auto& txo : tx.vout) weight += GetSerializeSize(txo) * witness_discount_scale;
 
     // Add the size of the transaction inputs as if they were signed.
     for (uint32_t i = 0; i < txouts.size(); i++) {
-        const auto txin_weight = GetSignedTxinWeight(wallet, coin_control, tx.vin[i], txouts[i], is_segwit, wallet->CanGrindR());
+        const auto txin_weight = GetSignedTxinWeight(wallet, coin_control, tx.vin[i], txouts[i], is_segwit, wallet->CanGrindR(), witness_discount_scale);
         if (!txin_weight) return TxSize{-1, -1};
         assert(*txin_weight > -1);
         weight += *txin_weight;
     }
 
     // It's ok to use 0 as the number of sigops since we never create any pathological transaction.
-    return TxSize{GetVirtualTransactionSize(weight, 0, 0), weight};
+    return TxSize{GetVirtualTransactionSize(weight, 0, 0, witness_discount_scale), weight};
 }
 
-TxSize CalculateMaximumSignedTxSize(const CTransaction &tx, const CWallet *wallet, const CCoinControl* coin_control)
+TxSize CalculateMaximumSignedTxSize(const CTransaction &tx, const CWallet *wallet, const CCoinControl* coin_control, int witness_discount_scale)
 {
     std::vector<CTxOut> txouts;
     // Look up the inputs. The inputs are either in the wallet, or in coin_control.
@@ -256,7 +291,7 @@ TxSize CalculateMaximumSignedTxSize(const CTransaction &tx, const CWallet *walle
             return TxSize{-1, -1};
         }
     }
-    return CalculateMaximumSignedTxSize(tx, wallet, txouts, coin_control);
+    return CalculateMaximumSignedTxSize(tx, wallet, txouts, coin_control, witness_discount_scale);
 }
 
 size_t CoinsResult::Size() const
@@ -336,12 +371,17 @@ util::Result<PreSelectedInputs> FetchSelectedInputs(const CWallet& wallet, const
                                             const CoinSelectionParams& coin_selection_params)
 {
     PreSelectedInputs result;
+    const int fetch_wscale = [&]() -> int {
+        const std::optional<int> h = wallet.chain().getHeight();
+        if (!h) return WITNESS_SCALE_FACTOR;
+        return GetWitnessDiscountScale(Params().GetConsensus(), *h + 1);
+    }();
     const bool can_grind_r = wallet.CanGrindR();
     std::map<COutPoint, CAmount> map_of_bump_fees = wallet.chain().calculateIndividualBumpFees(coin_control.ListSelected(), coin_selection_params.m_effective_feerate);
     for (const COutPoint& outpoint : coin_control.ListSelected()) {
         int64_t input_bytes = coin_control.GetInputWeight(outpoint).value_or(-1);
         if (input_bytes != -1) {
-            input_bytes = GetVirtualTransactionSize(input_bytes, 0, 0);
+            input_bytes = GetVirtualTransactionSize(input_bytes, 0, 0, fetch_wscale);
         }
         CTxOut txout;
         if (auto ptr_wtx = wallet.GetWalletTx(outpoint.hash)) {
@@ -351,7 +391,7 @@ util::Result<PreSelectedInputs> FetchSelectedInputs(const CWallet& wallet, const
             }
             txout = ptr_wtx->tx->vout.at(outpoint.n);
             if (input_bytes == -1) {
-                input_bytes = CalculateMaximumSignedInputSize(txout, &wallet, &coin_control);
+                input_bytes = CalculateMaximumSignedInputSize(txout, &wallet, &coin_control, fetch_wscale);
             }
         } else {
             // The input is external. We did not find the tx in mapWallet.
@@ -364,7 +404,7 @@ util::Result<PreSelectedInputs> FetchSelectedInputs(const CWallet& wallet, const
         }
 
         if (input_bytes == -1) {
-            input_bytes = CalculateMaximumSignedInputSize(txout, outpoint, &coin_control.m_external_provider, can_grind_r, &coin_control);
+            input_bytes = CalculateMaximumSignedInputSize(txout, outpoint, &coin_control.m_external_provider, can_grind_r, &coin_control, fetch_wscale);
         }
 
         if (input_bytes == -1) {
@@ -385,6 +425,12 @@ CoinsResult AvailableCoins(const CWallet& wallet,
                            const CoinFilterParams& params)
 {
     AssertLockHeld(wallet.cs_wallet);
+
+    const int coin_wscale = [&]() -> int {
+        const std::optional<int> h = wallet.chain().getHeight();
+        if (!h) return WITNESS_SCALE_FACTOR;
+        return GetWitnessDiscountScale(Params().GetConsensus(), *h + 1);
+    }();
 
     CoinsResult result;
     // Either the WALLET_FLAG_AVOID_REUSE flag is not set (in which case we always allow), or we default to avoiding, and only in the case where
@@ -486,7 +532,7 @@ CoinsResult AvailableCoins(const CWallet& wallet,
 
             std::unique_ptr<SigningProvider> provider = wallet.GetSolvingProvider(output.scriptPubKey);
 
-            int input_bytes = CalculateMaximumSignedInputSize(output, COutPoint(), provider.get(), can_grind_r, coinControl);
+            int input_bytes = CalculateMaximumSignedInputSize(output, COutPoint(), provider.get(), can_grind_r, coinControl, coin_wscale);
             // Because CalculateMaximumSignedInputSize infers a solvable descriptor to get the satisfaction size,
             // it is safe to assume that this input is solvable if input_bytes is greater than -1.
             bool solvable = input_bytes > -1;
@@ -1084,6 +1130,12 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
 {
     AssertLockHeld(wallet.cs_wallet);
 
+    const int wallet_wscale = [&]() -> int {
+        const std::optional<int> h = wallet.chain().getHeight();
+        if (!h) return WITNESS_SCALE_FACTOR;
+        return GetWitnessDiscountScale(Params().GetConsensus(), *h + 1);
+    }();
+
     FastRandomContext rng_fast;
     CMutableTransaction txNew; // The resulting transaction that we make
 
@@ -1095,7 +1147,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     coin_selection_params.m_avoid_partial_spends = coin_control.m_avoid_partial_spends;
     coin_selection_params.m_include_unsafe_inputs = coin_control.m_include_unsafe_inputs;
     coin_selection_params.m_max_tx_weight = coin_control.m_max_tx_weight.value_or(MAX_STANDARD_TX_WEIGHT);
-    int minimum_tx_weight = MIN_STANDARD_TX_NONWITNESS_SIZE * WITNESS_SCALE_FACTOR;
+    int minimum_tx_weight = MIN_STANDARD_TX_NONWITNESS_SIZE * wallet_wscale;
     if (coin_selection_params.m_max_tx_weight.value() < minimum_tx_weight || coin_selection_params.m_max_tx_weight.value() > MAX_STANDARD_TX_WEIGHT) {
         return util::Error{strprintf(_("Maximum transaction weight must be between %d and %d"), minimum_tx_weight, MAX_STANDARD_TX_WEIGHT)};
     }
@@ -1157,7 +1209,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     coin_selection_params.change_output_size = GetSerializeSize(change_prototype_txout);
 
     // Get size of spending the change output
-    int change_spend_size = CalculateMaximumSignedInputSize(change_prototype_txout, &wallet, /*coin_control=*/nullptr);
+    int change_spend_size = CalculateMaximumSignedInputSize(change_prototype_txout, &wallet, /*coin_control=*/nullptr, wallet_wscale);
     // If the wallet doesn't know how to sign change output, assume p2sh-p2wpkh
     // as lower-bound to allow BnB to do it's thing
     if (change_spend_size == -1) {
@@ -1350,16 +1402,16 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
         // Calculate vsize and weight from the signed transaction
         const CTransaction signed_tx(tmp_tx);
         // Use 0 for sigop cost since we're just estimating size, not validating
-        nBytes = GetVirtualTransactionSize(signed_tx, 0, 0);
+        nBytes = GetVirtualTransactionSize(signed_tx, 0, 0, wallet_wscale);
         if (nBytes <= 0) {
             return util::Error{_("Failed to calculate transaction size after signing")};
         }
         // Also populate tx_sizes for later weight check
-        int64_t weight = GetTransactionWeight(signed_tx);
+        int64_t weight = GetTransactionWeightWithScale(signed_tx, wallet_wscale);
         tx_sizes = TxSize{nBytes, weight};
     } else {
         // For non-PQ inputs, use standard estimation
-        tx_sizes = CalculateMaximumSignedTxSize(CTransaction(txNew), &wallet, &coin_control);
+        tx_sizes = CalculateMaximumSignedTxSize(CTransaction(txNew), &wallet, &coin_control, wallet_wscale);
         nBytes = tx_sizes.vsize;
         if (nBytes == -1) {
             return util::Error{_("Missing solving data for estimating transaction size")};
@@ -1464,7 +1516,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     CTransactionRef tx = MakeTransactionRef(std::move(txNew));
 
     // Limit size
-    if ((sign && GetTransactionWeight(*tx) > MAX_STANDARD_TX_WEIGHT) ||
+    if ((sign && GetTransactionWeightWithScale(*tx, wallet_wscale) > MAX_STANDARD_TX_WEIGHT) ||
         (!sign && tx_sizes.weight > MAX_STANDARD_TX_WEIGHT))
     {
         return util::Error{_("Transaction too large")};

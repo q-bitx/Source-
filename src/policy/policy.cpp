@@ -105,7 +105,7 @@ bool IsStandard(const CScript& scriptPubKey, const std::optional<unsigned>& max_
     return true;
 }
 
-bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason)
+bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason, int witness_discount_scale)
 {
     if (tx.version > TX_MAX_STANDARD_VERSION || tx.version < 1) {
         reason = "version";
@@ -116,7 +116,7 @@ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_dat
     // almost as much to process as they cost the sender in fees, because
     // computing signature hashes is O(ninputs*txsize). Limiting transactions
     // to MAX_STANDARD_TX_WEIGHT mitigates CPU exhaustion attacks.
-    unsigned int sz = GetTransactionWeight(tx);
+    const unsigned int sz = static_cast<unsigned int>(GetTransactionWeightWithScale(tx, witness_discount_scale));
     if (sz > MAX_STANDARD_TX_WEIGHT) {
         reason = "tx-size";
         return false;
@@ -189,7 +189,7 @@ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_dat
  *
  * Note that only the non-witness portion of the transaction is checked here.
  */
-bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
+bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs, bool pq_sigops_active)
 {
     if (tx.IsCoinBase()) {
         return true; // Coinbases don't use vin normally
@@ -214,7 +214,7 @@ bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
             if (stack.empty())
                 return false;
             CScript subscript(stack.back().begin(), stack.back().end());
-            if (subscript.GetSigOpCount(true) > MAX_P2SH_SIGOPS) {
+            if (subscript.GetSigOpCount(true, pq_sigops_active) > MAX_P2SH_SIGOPS) {
                 return false;
             }
         }
@@ -312,17 +312,17 @@ bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
     return true;
 }
 
-int64_t GetVirtualTransactionSize(int64_t nWeight, int64_t nSigOpCost, unsigned int bytes_per_sigop)
+int64_t GetVirtualTransactionSize(int64_t nWeight, int64_t nSigOpCost, unsigned int bytes_per_sigop, int witness_discount_scale)
 {
-    return (std::max(nWeight, nSigOpCost * bytes_per_sigop) + WITNESS_SCALE_FACTOR - 1) / WITNESS_SCALE_FACTOR;
+    return (std::max(nWeight, nSigOpCost * bytes_per_sigop) + witness_discount_scale - 1) / witness_discount_scale;
 }
 
-int64_t GetVirtualTransactionSize(const CTransaction& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop)
+int64_t GetVirtualTransactionSize(const CTransaction& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop, int witness_discount_scale)
 {
-    return GetVirtualTransactionSize(GetTransactionWeight(tx), nSigOpCost, bytes_per_sigop);
+    return GetVirtualTransactionSize(GetTransactionWeightWithScale(tx, witness_discount_scale), nSigOpCost, bytes_per_sigop, witness_discount_scale);
 }
 
-int64_t GetVirtualTransactionInputSize(const CTxIn& txin, int64_t nSigOpCost, unsigned int bytes_per_sigop)
+int64_t GetVirtualTransactionInputSize(const CTxIn& txin, int64_t nSigOpCost, unsigned int bytes_per_sigop, int witness_discount_scale)
 {
-    return GetVirtualTransactionSize(GetTransactionInputWeight(txin), nSigOpCost, bytes_per_sigop);
+    return GetVirtualTransactionSize(GetTransactionInputWeightWithScale(txin, witness_discount_scale), nSigOpCost, bytes_per_sigop, witness_discount_scale);
 }

@@ -168,7 +168,7 @@ std::string GetOpName(opcodetype opcode)
     }
 }
 
-unsigned int CScript::GetSigOpCount(bool fAccurate) const
+unsigned int CScript::GetSigOpCount(bool fAccurate, bool pq_sigops_active) const
 {
     unsigned int n = 0;
     const_iterator pc = begin();
@@ -178,9 +178,21 @@ unsigned int CScript::GetSigOpCount(bool fAccurate) const
         opcodetype opcode;
         if (!GetOp(pc, opcode))
             break;
-        if (opcode == OP_PQCHECKSIG || opcode == OP_PQCHECKSIGVERIFY)
+        if (opcode == OP_CHECKSIG || opcode == OP_CHECKSIGVERIFY) {
             n++;
-        else if (opcode == OP_CHECKMULTISIG || opcode == OP_CHECKMULTISIGVERIFY)
+        }
+        if (pq_sigops_active) {
+            if (opcode == OP_PQCHECKSIG || opcode == OP_PQCHECKSIGVERIFY ||
+                opcode == OP_CHECKSIGDILITHIUM || opcode == OP_CHECKSIGDILITHIUMVERIFY) {
+                n++;
+            } else if (opcode == OP_CHECKMULTISIGDILITHIUM || opcode == OP_CHECKMULTISIGDILITHIUMVERIFY) {
+                if (fAccurate && lastOpcode >= OP_1 && lastOpcode <= OP_16)
+                    n += DecodeOP_N(lastOpcode);
+                else
+                    n += MAX_PUBKEYS_PER_MULTISIG;
+            }
+        }
+        if (opcode == OP_CHECKMULTISIG || opcode == OP_CHECKMULTISIGVERIFY)
         {
             if (fAccurate && lastOpcode >= OP_1 && lastOpcode <= OP_16)
                 n += DecodeOP_N(lastOpcode);
@@ -192,10 +204,10 @@ unsigned int CScript::GetSigOpCount(bool fAccurate) const
     return n;
 }
 
-unsigned int CScript::GetSigOpCount(const CScript& scriptSig) const
+unsigned int CScript::GetSigOpCount(const CScript& scriptSig, bool pq_sigops_active) const
 {
     if (!IsPayToScriptHash())
-        return GetSigOpCount(true);
+        return GetSigOpCount(true, pq_sigops_active);
 
     // This is a pay-to-script-hash scriptPubKey;
     // get the last item that the scriptSig
@@ -213,7 +225,7 @@ unsigned int CScript::GetSigOpCount(const CScript& scriptSig) const
 
     /// ... and return its opcount:
     CScript subscript(vData.begin(), vData.end());
-    return subscript.GetSigOpCount(true);
+    return subscript.GetSigOpCount(true, pq_sigops_active);
 }
 
 bool CScript::IsPayToAnchor() const

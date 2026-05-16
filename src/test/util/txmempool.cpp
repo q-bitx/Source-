@@ -215,6 +215,6 @@ void AddToMempool(CTxMemPool& tx_pool, const CTxMemPoolEntry& entry)
     auto changeset = tx_pool.GetChangeSet();
     changeset->StageAddition(entry.GetSharedTx(), entry.GetFee(),
             entry.GetTime().count(), entry.GetHeight(), entry.GetSequence(),
-            entry.GetSpendsCoinbase(), entry.GetSigOpCost(), entry.GetLockPoints());
+            entry.GetSpendsCoinbase(), entry.GetSigOpCost(), entry.GetLockPoints(), entry.GetWitnessDiscountScale());
     changeset->Apply();
 }

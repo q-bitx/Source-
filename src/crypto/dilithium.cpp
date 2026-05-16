@@ -1,6 +1,8 @@
 #include "dilithium.h"
-#include <cstring>
 
+#include <crypto/dilithium_wrapper.h>
+
+#include <cstring>
 
 extern "C" {
 #include "crypto/dilithium/api.h"
@@ -22,10 +24,21 @@ const size_t DILITHIUM_PUBLICKEYBYTES = CRYPTO_PUBLICKEYBYTES;
 const size_t DILITHIUM_SECRETKEYBYTES = CRYPTO_SECRETKEYBYTES;
 const size_t DILITHIUM_SIGNATUREBYTES = CRYPTO_BYTES;
 
+static_assert(pqcrypto::dilithium::PUBKEY_BYTES == CRYPTO_PUBLICKEYBYTES);
+static_assert(pqcrypto::dilithium::PRIVKEY_BYTES == CRYPTO_SECRETKEYBYTES);
+static_assert(pqcrypto::dilithium::SIG_BYTES == CRYPTO_BYTES);
+
 bool PQ_GenerateKeypair(valtype& pubkey, valtype& privkey) {
-    pubkey.resize(DILITHIUM_PUBLICKEYBYTES);
-    privkey.resize(DILITHIUM_SECRETKEYBYTES);
-    return crypto_sign_keypair(pubkey.data(), privkey.data()) == 0;
+    pqcrypto::dilithium::PQPublicKey pub{};
+    pqcrypto::dilithium::PQPrivateKey priv{};
+    try {
+        pqcrypto::dilithium::keygen(&pub, &priv);
+    } catch (...) {
+        return false;
+    }
+    pubkey.assign(pub.data, pub.data + pqcrypto::dilithium::PUBKEY_BYTES);
+    privkey.assign(priv.data, priv.data + pqcrypto::dilithium::PRIVKEY_BYTES);
+    return true;
 }
 
 bool PQ_Sign(valtype& signature, const valtype& message, const valtype& privkey) {

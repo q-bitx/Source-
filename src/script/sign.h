@@ -32,6 +32,7 @@ public:
 
     /** Create a singular (non-script) signature. */
     virtual bool CreateSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const CKeyID& keyid, const CScript& scriptCode, SigVersion sigversion) const =0;
+    virtual bool CreateDilithiumSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const DilithiumPKHash& keyid, const CScript& scriptCode, SigVersion sigversion) const =0;
     virtual bool CreateSchnorrSig(const SigningProvider& provider, std::vector<unsigned char>& sig, const XOnlyPubKey& pubkey, const uint256* leaf_hash, const uint256* merkle_root, SigVersion sigversion) const =0;
 };
 
@@ -50,6 +51,7 @@ public:
     MutableTransactionSignatureCreator(const CMutableTransaction& tx LIFETIMEBOUND, unsigned int input_idx, const CAmount& amount, const PrecomputedTransactionData* txdata, int hash_type);
     const BaseSignatureChecker& Checker() const override { return checker; }
     bool CreateSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const CKeyID& keyid, const CScript& scriptCode, SigVersion sigversion) const override;
+    bool CreateDilithiumSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const DilithiumPKHash& keyid, const CScript& scriptCode, SigVersion sigversion) const override;
     bool CreateSchnorrSig(const SigningProvider& provider, std::vector<unsigned char>& sig, const XOnlyPubKey& pubkey, const uint256* leaf_hash, const uint256* merkle_root, SigVersion sigversion) const override;
 };
 
@@ -67,6 +69,8 @@ typedef std::pair<CPubKey, std::vector<unsigned char>> SigPair;
 // in order to construct final scriptSigs and scriptWitnesses.
 struct SignatureData {
     bool complete = false; ///< Stores whether the scriptSig and scriptWitness are complete
+    /** When true, Dilithium witness v0 keyhash template uses OP_CHECKSIG (must match SCRIPT_VERIFY_PQ_WITNESS verification). */
+    bool pq_witness_program_templates = false;
     bool witness = false; ///< Stores whether the input this SigData corresponds to is a witness input
     CScript scriptSig; ///< The scriptSig of an input. Contains complete signatures or the traditional partial signatures format
     CScript redeem_script; ///< The redeemScript (if any) for the input
@@ -97,14 +101,14 @@ struct SignatureData {
 /** Produce a script signature using a generic signature creator. */
 bool ProduceSignature(const SigningProvider& provider, const BaseSignatureCreator& creator, const CScript& scriptPubKey, SignatureData& sigdata);
 
+/** @param pq_witness_program_templates When true, Dilithium P2DWPKH witness templates match SCRIPT_VERIFY_PQ_WITNESS (OP_CHECKSIG). */
+bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, const std::map<COutPoint, Coin>& coins, int nHashType, std::map<int, bilingual_str>& input_errors, bool pq_witness_program_templates = false);
+
 /** Extract signature data from a transaction input, and insert it. */
 SignatureData DataFromTransaction(const CMutableTransaction& tx, unsigned int nIn, const CTxOut& txout);
 void UpdateInput(CTxIn& input, const SignatureData& data);
 
 /** Check whether a scriptPubKey is known to be segwit. */
 bool IsSegWitOutput(const SigningProvider& provider, const CScript& script);
-
-/** Sign the CMutableTransaction */
-bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* provider, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors);
 
 #endif // BITCOIN_SCRIPT_SIGN_H

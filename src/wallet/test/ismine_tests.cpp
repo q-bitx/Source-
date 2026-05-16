@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <addresstype.h>
+#include <crypto/dilithium.h>
 #include <key.h>
 #include <key_io.h>
 #include <node/context.h>
@@ -699,6 +701,47 @@ BOOST_AUTO_TEST_CASE(ismine_standard)
         result = keystore.GetLegacyScriptPubKeyMan()->IsMine(scriptPubKey);
         BOOST_CHECK_EQUAL(result, ISMINE_NO);
         BOOST_CHECK(keystore.GetLegacyScriptPubKeyMan()->GetScriptPubKeys().count(scriptPubKey) == 0);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(ismine_native_pq_witness_descriptor_wallet)
+{
+    std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
+    CWallet wallet(chain.get(), "", CreateMockableWalletDatabase());
+    BOOST_CHECK(wallet.LoadWallet());
+
+    valtype pubkey_bytes, privkey_bytes;
+    BOOST_REQUIRE(PQ_GenerateKeypair(pubkey_bytes, privkey_bytes));
+    CDilithiumPubKey dilPubKey(pubkey_bytes);
+    BOOST_REQUIRE(dilPubKey.IsValid());
+    const CKeyID keyid{CKeyID(dilPubKey.GetID())};
+    const DilithiumPKHash pk_hash{keyid};
+    const CScript witness_spk = GetScriptForDestination(DilithiumWitnessV0KeyHash(pk_hash));
+
+    std::vector<std::vector<unsigned char>> sol;
+    BOOST_CHECK_EQUAL(Solver(witness_spk, sol), TxoutType::DILITHIUM_WITNESS_V0_KEYHASH);
+
+    DescriptorScriptPubKeyMan* dil_spkm = nullptr;
+    {
+        LOCK(wallet.cs_wallet);
+        wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+        wallet.SetupDescriptorScriptPubKeyMans();
+        for (ScriptPubKeyMan* spkm : wallet.GetAllScriptPubKeyMans()) {
+            if (auto* d = dynamic_cast<DescriptorScriptPubKeyMan*>(spkm)) {
+                dil_spkm = d;
+                break;
+            }
+        }
+    }
+    BOOST_REQUIRE(dil_spkm != nullptr);
+    BOOST_CHECK(dil_spkm->AddDilithiumKeyPubKey(keyid, privkey_bytes, pubkey_bytes));
+
+    {
+        LOCK(wallet.cs_wallet);
+        BOOST_CHECK_EQUAL(wallet.IsMine(witness_spk), ISMINE_SPENDABLE);
+        BOOST_CHECK_EQUAL(wallet.IsMine(CTxDestination{DilithiumWitnessV0KeyHash(pk_hash)}), ISMINE_SPENDABLE);
+        BOOST_CHECK(dil_spkm->IsMine(witness_spk) == ISMINE_SPENDABLE);
+        BOOST_CHECK(wallet.GetSolvingProvider(witness_spk) != nullptr);
     }
 }
 

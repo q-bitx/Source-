@@ -1,4 +1,5 @@
 #ifndef BITCOIN_SCRIPT_STANDARD_H
+#include <script/interpreter.h>
 #define BITCOIN_SCRIPT_STANDARD_H
 
 enum class TxoutType {

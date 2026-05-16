@@ -401,13 +401,26 @@ public:
      * counted more accurately, assuming they are of the form
      *  ... OP_N CHECKMULTISIG ...
      */
-    unsigned int GetSigOpCount(bool fAccurate) const;
+    unsigned int GetSigOpCount(bool fAccurate) const
+    {
+        return GetSigOpCount(fAccurate, false);
+    }
+
+    /**
+     * @param pq_sigops_active When false, PQ/Dilithium opcode families do not contribute (pre-fork behavior).
+     */
+    unsigned int GetSigOpCount(bool fAccurate, bool pq_sigops_active) const;
 
     /**
      * Accurately count sigOps, including sigOps in
      * pay-to-script-hash transactions:
      */
-    unsigned int GetSigOpCount(const CScript& scriptSig) const;
+    unsigned int GetSigOpCount(const CScript& scriptSig) const
+    {
+        return GetSigOpCount(scriptSig, false);
+    }
+
+    unsigned int GetSigOpCount(const CScript& scriptSig, bool pq_sigops_active) const;
 
     /*
      * OP_1 <0x4e73>

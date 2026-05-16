@@ -4,6 +4,8 @@
 
 #include <key_io.h>
 #include <node/types.h>
+#include <psbt.h>
+#include <script/sign.h>
 #include <util/bip32.h>
 #include <util/strencodings.h>
 #include <wallet/wallet.h>
@@ -152,6 +154,26 @@ BOOST_AUTO_TEST_CASE(parse_hd_keypath)
 
     BOOST_CHECK(ParseHDKeypath("m/4294967295", keypath)); // 4294967295 == 0xFFFFFFFF (uint32_t max)
     BOOST_CHECK(!ParseHDKeypath("m/4294967296", keypath)); // 4294967296 == 0xFFFFFFFF (uint32_t max) + 1
+}
+
+BOOST_AUTO_TEST_CASE(psbt_sign_input_threads_pq_witness_template_flag)
+{
+    LOCK(m_wallet.cs_wallet);
+    m_wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+
+    PartiallySignedTransaction psbtx;
+    DataStream ssData{
+        "70736274ff01009a020000000258e87a21b56daf0c23be8e7070456c336f7cbaa5c8757924f545887bb2abdd750000000000ffffffff838d0427d0ec650a68aa46bb0b098aea4422c071b2ca78352a077959d07cea1d0100000000ffffffff0270aaf00800000000160014d85c2b71d0060b09c9886aeb815e50991dda124d00e1f5050000000016001400aea9a2e5f0f876a588df5546e8742d1d87008f000000000000000000"_hex,
+    };
+    ssData >> psbtx;
+
+    bool complete = true;
+    BOOST_REQUIRE(!m_wallet.FillPSBT(psbtx, complete, SIGHASH_ALL, false, true));
+
+    const PrecomputedTransactionData txdata = PrecomputePSBTData(psbtx);
+    SignatureData out_sigdata;
+    (void)SignPSBTInput(DUMMY_SIGNING_PROVIDER, psbtx, /*index=*/0, &txdata, SIGHASH_ALL, &out_sigdata, /*finalize=*/false, /*pq_witness_program_templates=*/true);
+    BOOST_CHECK(out_sigdata.pq_witness_program_templates);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

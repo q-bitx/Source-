@@ -1153,6 +1153,7 @@ static RPCHelpMan getblocktemplate()
 
     // NOTE: If at some point we support pre-segwit miners post-segwit-activation, this needs to take segwit support into consideration
     const bool fPreSegWit = !DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_SEGWIT);
+    const int gbt_wscale{GetWitnessDiscountScale(consensusParams, pindexPrev->nHeight + 1)};
 
     UniValue aCaps(UniValue::VARR); aCaps.push_back("proposal");
 
@@ -1192,7 +1193,7 @@ static RPCHelpMan getblocktemplate()
             nTxSigOps /= WITNESS_SCALE_FACTOR;
         }
         entry.pushKV("sigops", nTxSigOps);
-        entry.pushKV("weight", GetTransactionWeight(tx));
+        entry.pushKV("weight", GetTransactionWeightWithScale(tx, gbt_wscale));
 
         transactions.push_back(std::move(entry));
     }

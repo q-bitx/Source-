@@ -291,6 +291,10 @@ TxoutType Solver(const CScript& scriptPubKey, std::vector<std::vector<unsigned c
             vSolutionsRet.push_back(std::move(witnessprogram));
             return TxoutType::WITNESS_V0_KEYHASH;
         }
+        if (witnessversion == 2 && witnessprogram.size() == WITNESS_V0_KEYHASH_SIZE) {
+            vSolutionsRet.push_back(std::move(witnessprogram));
+            return TxoutType::DILITHIUM_WITNESS_V0_KEYHASH;
+        }
         if (witnessversion == 0 && witnessprogram.size() == WITNESS_V0_SCRIPTHASH_SIZE) {
             vSolutionsRet.push_back(std::move(witnessprogram));
             return TxoutType::WITNESS_V0_SCRIPTHASH;

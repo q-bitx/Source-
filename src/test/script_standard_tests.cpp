@@ -537,12 +537,12 @@ BOOST_AUTO_TEST_CASE(script_standard_Dilithium_roundtrip)
     // Note: Can't distinguish DilithiumScriptHash from regular ScriptHash at scriptPubKey level
     // This is a known limitation - distinction is at address encoding level
     
-    // Test DilithiumWitnessV0KeyHash round-trip (note: scriptPubKey is identical to regular witness)
+    // Test DilithiumWitnessV0KeyHash round-trip (native PQ: witness version 2, 20-byte program)
     DilithiumWitnessV0KeyHash dil_witness_keyhash(dilithium_pubkey);
     s = GetScriptForDestination(dil_witness_keyhash);
     solutions.clear();
-    BOOST_CHECK_EQUAL(Solver(s, solutions), TxoutType::WITNESS_V0_KEYHASH);
-    // Note: Can't distinguish DilithiumWitnessV0KeyHash from regular WitnessV0KeyHash at scriptPubKey level
+    BOOST_CHECK_EQUAL(Solver(s, solutions), TxoutType::DILITHIUM_WITNESS_V0_KEYHASH);
+    BOOST_CHECK_EQUAL(GetTxnOutputType(TxoutType::DILITHIUM_WITNESS_V0_KEYHASH), "dilithium_witness_v0_keyhash");
     
     // Test DilithiumWitnessV0ScriptHash round-trip (note: scriptPubKey is identical to regular witness)
     DilithiumWitnessV0ScriptHash dil_witness_scripthash(dil_redeem_script);

@@ -4,8 +4,10 @@
 
 #include <bitcoin-build-config.h> // IWYU pragma: keep
 
+#include <chainparams.h>
 #include <core_io.h>
 #include <key_io.h>
+#include <outputtype.h>
 #include <rpc/util.h>
 #include <script/script.h>
 #include <script/solver.h>
@@ -22,12 +24,13 @@ RPCHelpMan getnewaddress()
 {
     return RPCHelpMan{"getnewaddress",
                 "\nReturns a new address for receiving payments.\n"
-                "In Q-BitX, the default address type is PQ (Dilithium).\n"
+                "In Q-BitX, the default address type is auto PQ (Dilithium): legacy (P2PKH-style) before the PQ witness\n"
+                "activation height, native PQ witness (pq-bech32 / OP_2 <20>) after activation, using the same tip+1 rule as tx creation.\n"
                 "If 'label' is specified, it is added to the address book \n"
                 "so payments received with the address will be associated with 'label'.\n",
                 {
                     {"label", RPCArg::Type::STR, RPCArg::Default{""}, "The label name for the address to be linked to. It can also be set to the empty string \"\" to represent the default label. The label does not need to exist, it will be created if there is no label by the given name."},
-                    {"address_type", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "The address type to use. Default is \"pq\" (Dilithium). Options are \"pq\" (default), \"legacy\", \"p2sh-segwit\", \"bech32\", \"bech32m\"."},
+                    {"address_type", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "The address type to use. \"pq\" (default) selects auto PQ per activation height. Also: \"pq-bech32\" / \"dilithium-bech32\" (witness, rejected before activation), \"dilithium-legacy\" / aliases for explicit legacy PQ, plus Bitcoin-style legacy/p2sh-segwit/bech32/bech32m."},
                 },
                 RPCResult{
                     RPCResult::Type::STR, "address", "The new address"
@@ -47,6 +50,8 @@ RPCHelpMan getnewaddress()
     std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
     if (!pwallet) return UniValue::VNULL;
 
+    pwallet->BlockUntilSyncedToCurrentChain();
+
     LOCK(pwallet->cs_wallet);
 
     if (!pwallet->CanGetAddresses()) {
@@ -56,16 +61,31 @@ RPCHelpMan getnewaddress()
     // Parse the label first so we don't generate a key if there's an error
     const std::string label{LabelFromValue(request.params[0])};
 
-    // Default to PQ (Dilithium) in Q-BitX
-    OutputType output_type = OutputType::DILITHIUM_LEGACY;
-    if (!request.params[1].isNull()) {
-        std::optional<OutputType> parsed = ParseOutputType(request.params[1].get_str());
-        if (!parsed) {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Unknown address type '%s'", request.params[1].get_str()));
-        } else if (parsed.value() == OutputType::BECH32M && pwallet->GetLegacyScriptPubKeyMan()) {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, "Legacy wallets cannot provide bech32m addresses");
+    const bool pq_witness_next = IsPqWitnessActiveForNextBlock(pwallet->chain());
+
+    OutputType output_type;
+    if (request.params[1].isNull() || request.params[1].get_str().empty()) {
+        // Default: auto PQ (legacy before activation, native witness after)
+        output_type = pq_witness_next ? OutputType::DILITHIUM_BECH32 : OutputType::DILITHIUM_LEGACY;
+    } else {
+        const std::string type_str = request.params[1].get_str();
+        if (type_str == "pq") {
+            output_type = pq_witness_next ? OutputType::DILITHIUM_BECH32 : OutputType::DILITHIUM_LEGACY;
+        } else {
+            std::optional<OutputType> parsed = ParseOutputType(type_str);
+            if (!parsed) {
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Unknown address type '%s'", type_str));
+            }
+            if (parsed.value() == OutputType::BECH32M && pwallet->GetLegacyScriptPubKeyMan()) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Legacy wallets cannot provide bech32m addresses");
+            }
+            if (parsed.value() == OutputType::DILITHIUM_BECH32 && !pq_witness_next) {
+                throw JSONRPCError(RPC_INVALID_REQUEST,
+                    strprintf("PQ witness addresses (pq-bech32) are not available until PQ witness activates at height %d (next-block rule)",
+                        Params().GetConsensus().nPQWitnessHeight));
+            }
+            output_type = parsed.value();
         }
-        output_type = parsed.value();
     }
 
     auto op_dest = pwallet->GetNewDestination(output_type, label);
@@ -660,7 +680,8 @@ RPCHelpMan getaddressinfo()
         if (!solvable) {
             std::vector<std::vector<unsigned char>> solutions;
             TxoutType whichType = Solver(scriptPubKey, solutions);
-            if (whichType == TxoutType::DILITHIUM_PUBKEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+            if ((whichType == TxoutType::DILITHIUM_PUBKEYHASH || whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH) &&
+                solutions.size() > 0 && solutions[0].size() == 20) {
                 CKeyID keyid{uint160(solutions[0])};
                 if (pwallet->HaveDilithiumKey(keyid)) {
                     solvable = true;
@@ -677,7 +698,8 @@ RPCHelpMan getaddressinfo()
         // InferDescriptor doesn't recognize Dilithium, but we can check if we have the key
         std::vector<std::vector<unsigned char>> solutions;
         TxoutType whichType = Solver(scriptPubKey, solutions);
-        if (whichType == TxoutType::DILITHIUM_PUBKEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        if ((whichType == TxoutType::DILITHIUM_PUBKEYHASH || whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH) &&
+            solutions.size() > 0 && solutions[0].size() == 20) {
             CKeyID keyid{uint160(solutions[0])};
             if (pwallet->HaveDilithiumKey(keyid)) {
                 solvable = true;

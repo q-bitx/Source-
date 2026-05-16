@@ -8,6 +8,7 @@
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
+#include <policy/policy.h>
 #include <key_io.h>
 #include <script/descriptor.h>
 //#include <script/script.h>
@@ -172,7 +173,7 @@ void ScriptToUniv(const CScript& script, UniValue& out, bool include_hex, bool i
     out.pushKV("type", GetTxnOutputType(type));
 }
 
-void TxToUniv(const CTransaction& tx, const uint256& block_hash, UniValue& entry, bool include_hex, const CTxUndo* txundo, TxVerbosity verbosity)
+void TxToUniv(const CTransaction& tx, const uint256& block_hash, UniValue& entry, bool include_hex, const CTxUndo* txundo, TxVerbosity verbosity, std::optional<int> witness_discount_scale)
 {
     CHECK_NONFATAL(verbosity >= TxVerbosity::SHOW_DETAILS);
 
@@ -180,8 +181,25 @@ void TxToUniv(const CTransaction& tx, const uint256& block_hash, UniValue& entry
     entry.pushKV("hash", tx.GetWitnessHash().GetHex());
     entry.pushKV("version", tx.version);
     entry.pushKV("size", tx.GetTotalSize());
-    entry.pushKV("vsize", (GetTransactionWeight(tx) + WITNESS_SCALE_FACTOR - 1) / WITNESS_SCALE_FACTOR);
-    entry.pushKV("weight", GetTransactionWeight(tx));
+    entry.pushKV("strippedsize", (int)::GetSerializeSize(TX_NO_WITNESS(tx)));
+    if (witness_discount_scale.has_value()) {
+        const int scale{*witness_discount_scale};
+        entry.pushKV("witness_discount_scale", scale);
+        const int32_t active_weight{GetTransactionWeightWithScale(tx, scale)};
+        const int64_t active_vsize{GetVirtualTransactionSize(tx, 0, 0, scale)};
+        entry.pushKV("weight", active_weight);
+        entry.pushKV("vsize", active_vsize);
+        if (scale != WITNESS_SCALE_FACTOR) {
+            const int32_t bip141_weight{GetTransactionWeight(tx)};
+            entry.pushKV("bip141_weight", bip141_weight);
+            entry.pushKV("bip141_vsize", GetVirtualTransactionSize(bip141_weight, 0, 0, WITNESS_SCALE_FACTOR));
+            entry.pushKV("pq_weight", active_weight);
+            entry.pushKV("pq_vsize", active_vsize);
+        }
+    } else {
+        entry.pushKV("vsize", (GetTransactionWeight(tx) + WITNESS_SCALE_FACTOR - 1) / WITNESS_SCALE_FACTOR);
+        entry.pushKV("weight", GetTransactionWeight(tx));
+    }
     entry.pushKV("locktime", (int64_t)tx.nLockTime);
 
     UniValue vin{UniValue::VARR};

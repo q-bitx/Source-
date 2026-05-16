@@ -636,9 +636,9 @@ bool LegacyDataSPKM::CanProvide(const CScript& script, SignatureData& sigdata)
     }
 }
 
-bool LegacyScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const
+bool LegacyScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, bool pq_witness_program_templates) const
 {
-    return ::SignTransaction(tx, this, coins, sighash, input_errors);
+    return ::SignTransaction(tx, this, coins, sighash, input_errors, pq_witness_program_templates);
 }
 
 SigningResult LegacyScriptPubKeyMan::SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const
@@ -654,7 +654,7 @@ SigningResult LegacyScriptPubKeyMan::SignMessage(const std::string& message, con
     return SigningResult::SIGNING_FAILED;
 }
 
-std::optional<PSBTError> LegacyScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbtx, const PrecomputedTransactionData& txdata, int sighash_type, bool sign, bool bip32derivs, int* n_signed, bool finalize) const
+std::optional<PSBTError> LegacyScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbtx, const PrecomputedTransactionData& txdata, int sighash_type, bool sign, bool bip32derivs, int* n_signed, bool finalize, bool pq_witness_program_templates) const
 {
     if (n_signed) {
         *n_signed = 0;
@@ -681,7 +681,7 @@ std::optional<PSBTError> LegacyScriptPubKeyMan::FillPSBT(PartiallySignedTransact
             // There's no UTXO so we can just skip this now
             continue;
         }
-        SignPSBTInput(HidingSigningProvider(this, !sign, !bip32derivs), psbtx, i, &txdata, sighash_type, nullptr, finalize);
+        SignPSBTInput(HidingSigningProvider(this, !sign, !bip32derivs), psbtx, i, &txdata, sighash_type, nullptr, finalize, pq_witness_program_templates);
 
         bool signed_one = PSBTInputSigned(input);
         if (n_signed && (signed_one || !sign)) {
@@ -2138,6 +2138,21 @@ isminetype DescriptorScriptPubKeyMan::IsMine(const CScript& script) const
     if (m_map_script_pub_keys.count(script) > 0) {
         return ISMINE_SPENDABLE;
     }
+    // Dilithium receive outputs are not expanded from the Bitcoin descriptor; recognize by script pattern.
+    std::vector<std::vector<unsigned char>> solutions;
+    const TxoutType whichType = Solver(script, solutions);
+    if (whichType == TxoutType::DILITHIUM_PUBKEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        const CKeyID keyid = CKeyID(uint160(solutions[0]));
+        if (HaveDilithiumKey_Locked(keyid)) {
+            return ISMINE_SPENDABLE;
+        }
+    }
+    if (whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        const CKeyID keyid = CKeyID(uint160(solutions[0]));
+        if (HaveDilithiumKey_Locked(keyid)) {
+            return ISMINE_SPENDABLE;
+        }
+    }
     return ISMINE_NO;
 }
 
@@ -2343,7 +2358,19 @@ std::vector<WalletDestination> DescriptorScriptPubKeyMan::MarkUnusedAddresses(co
     LOCK(cs_desc_man);
     std::vector<WalletDestination> result;
     if (IsMine(script)) {
-        int32_t index = m_map_script_pub_keys[script];
+        // On-demand Dilithium placeholder ScriptPubKeyMans have no Bitcoin descriptor; PQ keys live in
+        // m_map_dilithium_keys / DB and are not descriptor-expanded or keypool-indexed.
+        if (!m_wallet_descriptor.descriptor) {
+            WalletLogPrintf("%s: Descriptor-less Dilithium placeholder SPKM matched script; skipping descriptor keypool marking\n", __func__);
+            return result;
+        }
+
+        const auto it_spk = m_map_script_pub_keys.find(script);
+        if (it_spk == m_map_script_pub_keys.end()) {
+            // e.g. Dilithium receive script recognized by IsMine but not produced from this descriptor's range.
+            return result;
+        }
+        const int32_t index = it_spk->second;
         if (index >= m_wallet_descriptor.next_index) {
             WalletLogPrintf("%s: Detected a used keypool item at index %d, mark all keypool items up to this item as used\n", __func__, index);
             auto out_keys = std::make_unique<FlatSigningProvider>();
@@ -2691,6 +2718,23 @@ std::unique_ptr<FlatSigningProvider> DescriptorScriptPubKeyMan::GetSigningProvid
             }
         }
     }
+    if (whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH && solutions.size() > 0 && solutions[0].size() == 20) {
+        const CKeyID keyid = CKeyID(uint160(solutions[0]));
+        if (HaveDilithiumKey_Locked(keyid)) {
+            std::unique_ptr<FlatSigningProvider> out_keys = std::make_unique<FlatSigningProvider>();
+            std::vector<unsigned char> privkeyBytes;
+            std::vector<unsigned char> pubkeyBytes;
+            if (GetDilithiumKeys(keyid, privkeyBytes, pubkeyBytes)) {
+                DilithiumPKHash dilPkhash(keyid);
+                CDilithiumPubKey dilPubKey(pubkeyBytes);
+                out_keys->dilithium_pubkeys[dilPkhash] = dilPubKey;
+                if (include_private && !privkeyBytes.empty()) {
+                    out_keys->dilithium_keys[dilPkhash] = privkeyBytes;
+                }
+                return out_keys;
+            }
+        }
+    }
 
     // Find the index of the script
     auto it = m_map_script_pub_keys.find(script);
@@ -2775,7 +2819,7 @@ bool DescriptorScriptPubKeyMan::CanProvide(const CScript& script, SignatureData&
     return IsMine(script);
 }
 
-bool DescriptorScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const
+bool DescriptorScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, bool pq_witness_program_templates) const
 {
     std::unique_ptr<FlatSigningProvider> keys = std::make_unique<FlatSigningProvider>();
     for (const auto& coin_pair : coins) {
@@ -2786,7 +2830,7 @@ bool DescriptorScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const s
         keys->Merge(std::move(*coin_keys));
     }
 
-    return ::SignTransaction(tx, keys.get(), coins, sighash, input_errors);
+    return ::SignTransaction(tx, keys.get(), coins, sighash, input_errors, pq_witness_program_templates);
 }
 
 SigningResult DescriptorScriptPubKeyMan::SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const
@@ -2807,7 +2851,7 @@ SigningResult DescriptorScriptPubKeyMan::SignMessage(const std::string& message,
     return SigningResult::OK;
 }
 
-std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbtx, const PrecomputedTransactionData& txdata, int sighash_type, bool sign, bool bip32derivs, int* n_signed, bool finalize) const
+std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbtx, const PrecomputedTransactionData& txdata, int sighash_type, bool sign, bool bip32derivs, int* n_signed, bool finalize, bool pq_witness_program_templates) const
 {
     if (n_signed) {
         *n_signed = 0;
@@ -2882,7 +2926,7 @@ std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTran
             }
         }
 
-        SignPSBTInput(HidingSigningProvider(keys.get(), /*hide_secret=*/!sign, /*hide_origin=*/!bip32derivs), psbtx, i, &txdata, sighash_type, nullptr, finalize);
+        SignPSBTInput(HidingSigningProvider(keys.get(), /*hide_secret=*/!sign, /*hide_origin=*/!bip32derivs), psbtx, i, &txdata, sighash_type, nullptr, finalize, pq_witness_program_templates);
 
         bool signed_one = PSBTInputSigned(input);
         if (n_signed && (signed_one || !sign)) {
@@ -2927,6 +2971,13 @@ uint256 DescriptorScriptPubKeyMan::GetID() const
 {
     LOCK(cs_desc_man);
     return m_wallet_descriptor.id;
+}
+
+void DescriptorScriptPubKeyMan::SetPlaceholderDescriptorId(const uint256& id)
+{
+    LOCK(cs_desc_man);
+    Assume(m_wallet_descriptor.descriptor == nullptr);
+    m_wallet_descriptor.id = id;
 }
 
 void DescriptorScriptPubKeyMan::SetCache(const DescriptorCache& cache)

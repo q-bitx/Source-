@@ -37,25 +37,27 @@ static inline int GetRetargetAdjustmentFactor(int nextHeight)
 
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params& params)
 {
+    assert(pindexLast != nullptr);
+    if (pindexLast->nHeight + 1 >= params.nLWMAHeight) {
+        return LwmaGetNextWorkRequired(pindexLast, pblock, params);
+    }
 
-    // Temporary debug logging for EDA behavior (do NOT use MTP in the delta computation).
-    // Note: MTP may be useful for context in debugging, but must never affect EDA triggering.
-    const uint32_t last_time = pindexLast ? (uint32_t)pindexLast->GetBlockTime() : 0;
+    // Temporary debug logging for EDA behavior (pre-LWMA only; do NOT use MTP in the delta computation).
+    const uint32_t last_time = (uint32_t)pindexLast->GetBlockTime();
     const uint32_t cand_time = pblock ? (uint32_t)pblock->GetBlockTime() : 0;
-    const int64_t delta = (pblock && pindexLast) ? (int64_t)cand_time - (int64_t)last_time : 0;
+    const int64_t delta = pblock ? (int64_t)cand_time - (int64_t)last_time : 0;
     LogPrintf("[POW][EDA] dbg height=%d next=%d window=%u enabled=%d allowMin=%d retargetBoundary=%d last_time=%u cand_time=%u delta=%d last_bits=%08x mtp=%u\n",
-              pindexLast ? pindexLast->nHeight : -1,
-              pindexLast ? pindexLast->nHeight + 1 : -1,
+              pindexLast->nHeight,
+              pindexLast->nHeight + 1,
               (unsigned int)params.nPowEmergencyWindow,
               params.fPowEnableEmergencyDifficultyDrop ? 1 : 0,
               params.fPowAllowMinDifficultyBlocks ? 1 : 0,
-              (pindexLast && ((pindexLast->nHeight + 1) % params.DifficultyAdjustmentInterval() == 0)) ? 1 : 0,
+              ((pindexLast->nHeight + 1) % params.DifficultyAdjustmentInterval() == 0) ? 1 : 0,
               last_time,
               cand_time,
               (int)delta,
-              pindexLast ? pindexLast->nBits : 0,
-              pindexLast ? (uint32_t)pindexLast->GetMedianTimePast() : 0);
-    assert(pindexLast != nullptr);
+              pindexLast->nBits,
+              (uint32_t)pindexLast->GetMedianTimePast());
     unsigned int nProofOfWorkLimit = UintToArith256(params.powLimit).GetCompact();
 
     // Only change once per difficulty adjustment interval
@@ -122,6 +124,66 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
     return CalculateNextWorkRequired(pindexLast, pindexFirst->GetBlockTime(), params);
 }
 
+unsigned int LwmaGetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader* pblock, const Consensus::Params& params)
+{
+    (void)pblock;
+
+    const int64_t T = params.nPowTargetSpacing;
+    const int N = params.nLWMAWindow;
+    assert(N > 0);
+    const int64_t k = static_cast<int64_t>(N) * (N + 1) * T / 2;
+    const int height = pindexLast->nHeight;
+    const arith_uint256 powLimit = UintToArith256(params.powLimit);
+
+    if (height < N) {
+        return powLimit.GetCompact();
+    }
+
+    arith_uint256 sumTarget;
+    int64_t weightedSolvetimes = 0;
+    const CBlockIndex* pindexWN = pindexLast->GetAncestor(height - N);
+    assert(pindexWN != nullptr);
+    int64_t previousTimestamp = pindexWN->GetBlockTime();
+
+    for (int i = 1; i <= N; i++) {
+        const CBlockIndex* block = pindexLast->GetAncestor(height - N + i);
+        assert(block != nullptr);
+        const int64_t thisTimestamp = block->GetBlockTime();
+
+        int64_t solvetime = thisTimestamp - previousTimestamp;
+        solvetime = std::min(solvetime, 6 * T);
+        solvetime = std::max(solvetime, -6 * T);
+
+        weightedSolvetimes += solvetime * i;
+
+        arith_uint256 target;
+        target.SetCompact(block->nBits);
+        sumTarget += target / arith_uint256(static_cast<uint64_t>(k) * static_cast<uint64_t>(N));
+
+        previousTimestamp = thisTimestamp;
+    }
+
+    if (weightedSolvetimes < 1) {
+        weightedSolvetimes = 1;
+    }
+
+    const uint32_t wst_u32 = static_cast<uint32_t>(weightedSolvetimes);
+    arith_uint256 nextTarget;
+    if (wst_u32 != 0 && sumTarget > (powLimit / arith_uint256(static_cast<uint64_t>(wst_u32)))) {
+        nextTarget = powLimit;
+    } else {
+        nextTarget = sumTarget * wst_u32;
+    }
+
+    if (nextTarget > powLimit) {
+        nextTarget = powLimit;
+    }
+
+    const unsigned int next_bits = nextTarget.GetCompact();
+
+    return next_bits;
+}
+
 unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nFirstBlockTime, const Consensus::Params& params)
 {
     if (params.fPowNoRetargeting)
@@ -179,6 +241,8 @@ if (bnNew > max_target) bnNew = max_target;
 bool PermittedDifficultyTransition(const Consensus::Params& params, int64_t height, uint32_t old_nbits, uint32_t new_nbits)
 {
     if (params.fPowAllowMinDifficultyBlocks) return true;
+
+    if (height >= params.nLWMAHeight) return true;
 
     if (height % params.DifficultyAdjustmentInterval() == 0) {
         int64_t smallest_timespan = params.nPowTargetTimespan/4;

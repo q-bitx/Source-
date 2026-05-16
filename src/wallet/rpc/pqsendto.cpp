@@ -8,6 +8,7 @@
 #include <chainparams.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
+#include <consensus/params.h>
 #include <core_io.h>
 #include <crypto/dilithium.h>
 #include <crypto/dilithium_key.h>
@@ -33,6 +34,7 @@
 #include <limits>
 #include <optional>
 #include <set>
+#include <variant>
 #include <vector>
 
 namespace wallet {
@@ -54,6 +56,12 @@ static bool IsPQScript(const CScript& script)
            whichType == TxoutType::DILITHIUM_WITNESS_V0_SCRIPTHASH ||
            whichType == TxoutType::DILITHIUM_MULTISIG ||
            whichType == TxoutType::QBITX_DILITHIUM;
+}
+
+static bool IsNativePQWitnessProgram(const CScript& script)
+{
+    // Native PQ witness keyhash discriminator: OP_2 <20-byte program>
+    return script.size() == 22 && script[0] == OP_2 && script[1] == 20;
 }
 
 // Extract Dilithium public key from secret key bytes
@@ -205,8 +213,11 @@ RPCHelpMan pqsendtoaddress()
         CKeyID keyid;
         if (const DilithiumPKHash* dil_pkhash = std::get_if<DilithiumPKHash>(&fromDest)) {
             keyid = CKeyID(uint160(*dil_pkhash));
+        } else if (const DilithiumWitnessV0KeyHash* dil_wkh = std::get_if<DilithiumWitnessV0KeyHash>(&fromDest)) {
+            keyid = CKeyID(uint160(*dil_wkh));
         } else {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "from_address must be a Dilithium P2PKH address");
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+                "from_address must be a Dilithium P2PKH or native PQ witness (pq-bech32) address");
         }
 
         std::vector<unsigned char> privkeyBytes;
@@ -266,6 +277,17 @@ RPCHelpMan pqsendtoaddress()
             throw JSONRPCError(RPC_WALLET_ERROR, "Public key does not match from_address");
         }
 
+        std::optional<int> tipHeightOpt = wallet->chain().getHeight();
+        if (!tipHeightOpt.has_value()) {
+            throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to get chain tip height");
+        }
+        const int next_height = *tipHeightOpt + 1;
+        const Consensus::Params& consensus{Params().GetConsensus()};
+        const bool pq_witness_active = Consensus::IsPQWitnessEnabled(consensus, next_height);
+        const CScript changeScriptPubKey = pq_witness_active
+            ? GetScriptForDestination(DilithiumWitnessV0KeyHash(dilPubKey))
+            : fromScriptPubKey;
+
         // Parse to_address
         std::string toAddress = request.params[1].get_str();
         CTxDestination toDest = DecodeDestination(toAddress);
@@ -280,6 +302,11 @@ RPCHelpMan pqsendtoaddress()
                 strprintf("to_address must be a PQ/Dilithium address. '%s' is not a PQ address.", toAddress));
         }
 
+        if (!pq_witness_active && (std::holds_alternative<DilithiumWitnessV0KeyHash>(toDest) || std::holds_alternative<DilithiumWitnessV0ScriptHash>(toDest))) {
+            throw JSONRPCError(RPC_INVALID_REQUEST,
+                strprintf("PQ witness is not active until height %d", consensus.nPQWitnessHeight));
+        }
+
         CAmount amount = AmountFromValue(request.params[2]);
         if (amount <= 0) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Amount must be greater than 0");
@@ -290,11 +317,6 @@ RPCHelpMan pqsendtoaddress()
             feeLevel = request.params[3].get_str();
         }
         CFeeRate feerate = GetFeeRate(feeLevel);
-
-        std::optional<int> tipHeightOpt = wallet->chain().getHeight();
-        if (!tipHeightOpt.has_value()) {
-            throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to get chain tip height");
-        }
 
         // Gather available UTXOs - only confirmed (depth >= 1), unspent
         std::vector<std::pair<COutPoint, CAmount>> availableUTXOs;
@@ -414,7 +436,7 @@ RPCHelpMan pqsendtoaddress()
                 change = totalInputAmount - sendAmount - fee;
 
                 if (change > 0) {
-                    CTxOut changeOutput(change, fromScriptPubKey);
+                    CTxOut changeOutput(change, changeScriptPubKey);
                     if (IsDust(changeOutput, dustRelayFee)) {
                         change = 0;
                         fee = totalInputAmount - sendAmount;
@@ -435,15 +457,23 @@ RPCHelpMan pqsendtoaddress()
             }
             mtx.vout.emplace_back(sendAmount, outputScriptPubKey);
             if (change > 0) {
-                mtx.vout.emplace_back(change, fromScriptPubKey);
+                mtx.vout.emplace_back(change, changeScriptPubKey);
             }
 
             // Sign
             CTransaction tx(mtx);
             int32_t nHashType = SIGHASH_ALL;
-            CAmount amountForSighash = 0;
+            const bool from_is_native_pq_witness = IsNativePQWitnessProgram(fromScriptPubKey);
+            CScript witness_script;
+            if (from_is_native_pq_witness) {
+                const std::vector<unsigned char> program(fromScriptPubKey.begin() + 2, fromScriptPubKey.end());
+                witness_script << OP_DUP << OP_HASH160 << program << OP_EQUALVERIFY << OP_CHECKSIG;
+            }
             for (size_t i = 0; i < mtx.vin.size(); ++i) {
-                uint256 sighash = SignatureHash(fromScriptPubKey, tx, i, nHashType, amountForSighash, SigVersion::BASE, nullptr);
+                const CAmount input_amount = selectedUTXOs[i].second;
+                const uint256 sighash = from_is_native_pq_witness
+                    ? SignatureHash(witness_script, tx, i, nHashType, input_amount, SigVersion::WITNESS_V0, nullptr)
+                    : SignatureHash(fromScriptPubKey, tx, i, nHashType, 0, SigVersion::BASE, nullptr);
                 std::vector<unsigned char> msgHash(sighash.begin(), sighash.end());
                 std::vector<unsigned char> signature;
                 if (!PQ_Sign(signature, msgHash, privkeyBytes)) {
@@ -451,19 +481,43 @@ RPCHelpMan pqsendtoaddress()
                 }
                 std::vector<unsigned char> sigWithHashtype = signature;
                 sigWithHashtype.push_back(static_cast<unsigned char>(nHashType));
-                CScript scriptSig;
-                scriptSig << sigWithHashtype << pubkeyBytes;
-                mtx.vin[i].scriptSig = scriptSig;
+                if (from_is_native_pq_witness) {
+                    mtx.vin[i].scriptSig = CScript{};
+                    mtx.vin[i].scriptWitness.stack.clear();
+                    mtx.vin[i].scriptWitness.stack.push_back(sigWithHashtype);
+                    mtx.vin[i].scriptWitness.stack.push_back(pubkeyBytes);
+                } else {
+                    CScript scriptSig;
+                    scriptSig << sigWithHashtype << pubkeyBytes;
+                    mtx.vin[i].scriptSig = scriptSig;
+                    mtx.vin[i].scriptWitness.stack.clear();
+                }
             }
 
-            // Broadcast
-            CTransaction final_tx(mtx);
-            Txid txid = final_tx.GetHash();
+            const std::string debug_script_sig_hex = mtx.vin.empty() ? "" : HexStr(mtx.vin[0].scriptSig);
+            const int64_t debug_witness_items = mtx.vin.empty() ? 0 : static_cast<int64_t>(mtx.vin[0].scriptWitness.stack.size());
+            const int64_t debug_witness0_size =
+                (!mtx.vin.empty() && mtx.vin[0].scriptWitness.stack.size() > 0) ? static_cast<int64_t>(mtx.vin[0].scriptWitness.stack[0].size()) : 0;
+            const int64_t debug_witness1_size =
+                (!mtx.vin.empty() && mtx.vin[0].scriptWitness.stack.size() > 1) ? static_cast<int64_t>(mtx.vin[0].scriptWitness.stack[1].size()) : 0;
+            // Broadcast: construct final tx by moving mtx so witness stacks are preserved as-is.
+            CTransactionRef final_tx = MakeTransactionRef(std::move(mtx));
+            Txid txid = final_tx->GetHash();
+            Wtxid wtxid = final_tx->GetWitnessHash();
             std::string err_string;
             const CAmount max_tx_fee = MAX_MONEY;
-            bool broadcast_ok = wallet->chain().broadcastTransaction(MakeTransactionRef(final_tx), max_tx_fee, /*relay=*/true, err_string);
+            bool broadcast_ok = wallet->chain().broadcastTransaction(final_tx, max_tx_fee, /*relay=*/true, err_string);
             if (!broadcast_ok) {
-                throw JSONRPCError(RPC_WALLET_ERROR, strprintf("Failed to broadcast transaction: %s", err_string));
+                throw JSONRPCError(RPC_WALLET_ERROR, strprintf(
+                    "Failed to broadcast transaction: %s (native_pq_witness=%d scriptSig=%s witness_items=%d witness0_size=%d witness1_size=%d txid=%s wtxid=%s)",
+                    err_string,
+                    from_is_native_pq_witness,
+                    debug_script_sig_hex,
+                    debug_witness_items,
+                    debug_witness0_size,
+                    debug_witness1_size,
+                    txid.GetHex(),
+                    wtxid.GetHex()));
             }
 
             txidsArr.push_back(txid.GetHex());
@@ -476,6 +530,13 @@ RPCHelpMan pqsendtoaddress()
             detail.pushKV("sent", ValueFromAmount(sendAmount));
             detail.pushKV("fee", ValueFromAmount(fee));
             detail.pushKV("inputs_used", static_cast<int64_t>(selectedUTXOs.size()));
+            detail.pushKV("debug_native_pq_witness", from_is_native_pq_witness);
+            detail.pushKV("debug_scriptSig_hex", debug_script_sig_hex);
+            detail.pushKV("debug_witness_items", debug_witness_items);
+            detail.pushKV("debug_witness0_size", debug_witness0_size);
+            detail.pushKV("debug_witness1_size", debug_witness1_size);
+            detail.pushKV("debug_txid", txid.GetHex());
+            detail.pushKV("debug_wtxid", wtxid.GetHex());
             detailsArr.push_back(detail);
 
             for (const auto& [op, val] : selectedUTXOs) {
