@@ -381,6 +381,7 @@ endif()
 # LevelDB discovery: prefer depends for cross builds, system library for native Linux
 set(QBITX_DEPENDS_PREFIX "" CACHE PATH "Depends install prefix (e.g. depends/x86_64-pc-linux-gnu). If set, used for LevelDB and prepended to CMAKE_PREFIX_PATH.")
 set(_use_depends_leveldb FALSE)
+set(QBITX_USE_BUNDLED_LEVELDB FALSE)
 
 # Determine if we should use depends LevelDB:
 # - Cross-compiling (Windows/MinGW or other cross targets)
@@ -390,7 +391,14 @@ if(CMAKE_CROSSCOMPILING OR WIN32 OR MINGW OR QBITX_DEPENDS_PREFIX OR CMAKE_FIND_
   set(_use_depends_leveldb TRUE)
 endif()
 
-if(_use_depends_leveldb)
+# Windows / MinGW targets: bundled LevelDB from src/leveldb (cmake/leveldb.cmake). Depends does not provide LevelDB for these triplets.
+if(_use_depends_leveldb AND (WIN32 OR MINGW))
+  set(QBITX_USE_BUNDLED_LEVELDB TRUE)
+endif()
+
+if(QBITX_USE_BUNDLED_LEVELDB)
+  # leveldb.cmake needs core_interface, crc32c, and TryAppendCXXFlags; those exist after core_interface setup (see below).
+elseif(_use_depends_leveldb)
   # Cross builds or explicit depends: use CONFIG mode from depends prefix
   if(QBITX_DEPENDS_PREFIX)
     list(PREPEND CMAKE_PREFIX_PATH "${QBITX_DEPENDS_PREFIX}")
@@ -1044,6 +1052,12 @@ endif()
 target_compile_definitions(core_interface INTERFACE ${DEPENDS_COMPILE_DEFINITIONS})
 target_compile_definitions(core_interface_relwithdebinfo INTERFACE ${DEPENDS_COMPILE_DEFINITIONS_RELWITHDEBINFO})
 target_compile_definitions(core_interface_debug INTERFACE ${DEPENDS_COMPILE_DEFINITIONS_DEBUG})
+
+if(QBITX_USE_BUNDLED_LEVELDB)
+  include("${CMAKE_SOURCE_DIR}/cmake/crc32c.cmake")
+  include("${CMAKE_SOURCE_DIR}/cmake/leveldb.cmake")
+  target_link_libraries(qbitx PRIVATE leveldb)
+endif()
 
 # If the {CXX,LD}FLAGS environment variables are defined during building depends
 # and configuring this build system, their content might be duplicated.
