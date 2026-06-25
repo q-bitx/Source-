@@ -409,8 +409,7 @@ static bool EvalPQChecksigPreTapscript(
     const BaseSignatureChecker& checker,
     SigVersion sigversion,
     ScriptError* serror,
-    bool& success,
-    bool unified_dilithium_with_op_checksig)
+    bool& success)
 {
     assert(sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0);
 
@@ -433,7 +432,7 @@ if (vchSig.size() != DILITHIUM_SIGNATUREBYTES + 1) {
     success = !vchSig.empty();
 
     if (success) {
-        if (unified_dilithium_with_op_checksig && (flags & SCRIPT_VERIFY_PQ_WITNESS)) {
+        if (flags & SCRIPT_VERIFY_PQ_WITNESS) {
             success = checker.CheckDilithiumSignature(vchSig, vchPubKey, scriptCode, sigversion, execdata, flags, serror);
         } else {
             success = checker.CheckPQSignature(vchSig, vchPubKey, scriptCode, sigversion, execdata, serror);
@@ -1191,7 +1190,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         // Use EvalPQChecksigPreTapscript for PQ/Dilithium signature verification
                         // It handles size validation, FindAndDelete (for scriptCode it builds internally), and PQ signature check
                         bool pqSuccess = false;
-                        if (!EvalPQChecksigPreTapscript(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, pqSuccess, /*unified_dilithium_with_op_checksig=*/true)) {
+                        if (!EvalPQChecksigPreTapscript(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, pqSuccess)) {
                             // EvalPQChecksigPreTapscript returned false, meaning an error occurred
                             // serror is already set by EvalPQChecksigPreTapscript
                             return false;
@@ -1443,7 +1442,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                             // Use PQ verification function
                             // EvalPQChecksigPreTapscript handles NULLFAIL internally
                             bool pqSuccess = false;
-                            if (!EvalPQChecksigPreTapscript(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, pqSuccess, /*unified_dilithium_with_op_checksig=*/true)) {
+                            if (!EvalPQChecksigPreTapscript(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, pqSuccess)) {
                                 // EvalPQChecksigPreTapscript returned false, meaning an error occurred
                                 // serror is already set by EvalPQChecksigPreTapscript (may include NULLFAIL)
                                 return false;
@@ -1519,8 +1518,7 @@ case OP_PQCHECKSIGVERIFY:
             checker,
             sigversion,
             serror,
-            fSuccess,
-            /*unified_dilithium_with_op_checksig=*/false)) {
+            fSuccess)) {
         return false;
     }
 
@@ -1563,8 +1561,7 @@ case OP_PQCHECKSIGADD:
             checker,
             sigversion,
             serror,
-            fSuccess,
-            /*unified_dilithium_with_op_checksig=*/false)) {
+            fSuccess)) {
         return false;
     }
 
