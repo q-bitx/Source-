@@ -391,18 +391,14 @@ Do not expose RPC publicly without proper firewalling, authentication and operat
 
 ---
 
-## ⚠️ Security warning
+## ⚠️ Security and operator notice
 
-Q-BitX is experimental blockchain software.
+Q-BitX is a mainnet blockchain with scheduled consensus activations.
 
-Before running it in production-like environments:
+Node operators, miners, pools, exchanges and wallet users should upgrade before mandatory activation heights, keep RPC access private and always back up wallets.
 
-* back up wallets;
-* test upgrades on a separate node;
-* monitor consensus activation heights;
-* keep RPC private;
-* verify binaries and releases;
-* upgrade before mandatory activation heights.
+Post-quantum signatures protect transaction authorization. SHA256d Proof-of-Work protects block production and chain work.
+
 
 ---
 
