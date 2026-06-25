@@ -21,7 +21,7 @@ This repository contains the reference node (qbitx) and CLI (qbitx-cli).
 
 ## What this is / what this is not
 
- This is a Bitcoin-style chain that:
+ This is a Blockchain that:
  mines blocks with SHA256d
  validates and spends PQ scripts
 
