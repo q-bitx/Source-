@@ -133,7 +133,7 @@ BOOST_AUTO_TEST_CASE(test_assumeutxo)
     const auto params = CreateChainParams(*m_node.args, ChainType::REGTEST);
 
     // These heights don't have assumeutxo configurations associated, per the contents
-    // of kernel/chainparams.cpp.
+    // of kernel/chainparams_main.cpp.
     std::vector<int> bad_heights{0, 100, 111, 115, 209, 211};
 
     for (auto empty : bad_heights) {
@@ -370,6 +370,27 @@ BOOST_AUTO_TEST_CASE(pq_witness_chainparams_heights)
     const auto reg_params = CreateChainParams(*m_node.args, ChainType::REGTEST);
     BOOST_CHECK_EQUAL(reg_params->GetConsensus().nPQWitnessHeight, 10);
     BOOST_CHECK_EQUAL(reg_params->GetConsensus().nPQSigopsHeight, 1);
+}
+
+//! Mainnet must not retain inherited Bitcoin sync metadata (assumeutxo / chainTxData).
+BOOST_AUTO_TEST_CASE(sync_metadata_not_bitcoin_inherited)
+{
+    constexpr uint64_t BITCOIN_MAINNET_CHAIN_TX_COUNT = 1161875261;
+    constexpr uint256 BITCOIN_MAINNET_ASSUMEUTXO_BLOCKHASH{
+        "0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5"};
+
+    const auto main_params = CreateChainParams(*m_node.args, ChainType::MAIN);
+
+    BOOST_CHECK(!main_params->AssumeutxoForHeight(840'000));
+    BOOST_CHECK(!main_params->AssumeutxoForHeight(880'000));
+    BOOST_CHECK(!main_params->AssumeutxoForBlockhash(BITCOIN_MAINNET_ASSUMEUTXO_BLOCKHASH));
+
+    const auto& txdata = main_params->TxData();
+    BOOST_CHECK_NE(txdata.tx_count, BITCOIN_MAINNET_CHAIN_TX_COUNT);
+    BOOST_CHECK_LT(txdata.tx_count, 1'000'000);
+
+    BOOST_CHECK(main_params->GetConsensus().nMinimumChainWork.IsNull());
+    BOOST_CHECK(main_params->GetConsensus().defaultAssumeValid.IsNull());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
