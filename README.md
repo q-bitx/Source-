@@ -1,115 +1,416 @@
-# Q-BitX (QBX) — Post-Quantum chain (Dilithium / ML-DSA)
+# ⚛️ Q-BitX (QBX)
 
-Q-BitX (QBX) is a Bitcoin Core–derived blockchain that experiments with post-quantum signatures using Dilithium (ML-DSA) while keeping SHA256d PoW mining.
+**Q-BitX (QBX)** is a Bitcoin Core–derived blockchain focused on post-quantum transaction signatures.
 
-This repository contains the reference node (qbitx) and CLI (qbitx-cli).
+It keeps classic **SHA256d Proof-of-Work** mining while adding **Dilithium / ML-DSA post-quantum signatures** into script validation and wallet/RPC workflows.
 
-> Status: mainnet
-
-
----
-
-## Key features
-
- SHA256d Proof-of-Work (ASIC/CPU/GPU compatible *for hashing*).
- Post-quantum signatures (Dilithium / ML-DSA) integrated into script validation.
- PQ output types (Dilithium pubkey / pubkeyhash variants).
- RPC helpers for PQ workflow (e.g. pqsendfrom).
- Conservative defaults focused on decentralization and DoS safety.
+> **Network status:** Mainnet
+> **Consensus model:** SHA256d PoW + Dilithium / ML-DSA signatures
+> **Supply:** 21,000,000 QBX
+> **Premine:** No premine
 
 ---
 
-## What this is / what this is not
+## ⚠️ Mandatory upgrade notice
 
- This is a Blockchain that:
- mines blocks with SHA256d
- validates and spends PQ scripts
+Q-BitX includes scheduled consensus activations.
 
- This is not (yet):
- SegWit / witness-enabled chain (planned/optional future upgrade)
- a production-hardened wallet ecosystem
- audited software
+All node operators, pools, exchanges and service providers should upgrade before the activation heights below:
 
----
+|     Height | Activation                                                                      |
+| ---------: | ------------------------------------------------------------------------------- |
+| **200001** | LWMA difficulty adjustment                                                      |
+| **220000** | BIP34 / BIP65 / BIP66 / CSV / SegWit baseline rules + 8M block limits           |
+| **230000** | PQ sigops + native PQ witness activation                                        |
+| **709632** | Taproot minimum activation height, currently inherited and inactive in practice |
 
-## Requirements
-
-### Linux (recommended)
- CMake + Ninja
- C++ compiler toolchain
- Boost, OpenSSL, libevent, sqlite (and usual Bitcoin Core deps)
-
-### Windows
-Use WSL2 or build with a proper toolchain (advanced).
+Old nodes may reject, mis-handle or fail to relay blocks after these heights.
 
 ---
 
-### Build (Linux)
+## ✨ Key features
 
-### Open PowerShell and run:
-### On first launch, Ubuntu will ask you to create a UNIX username and password.
-wsl --install 
-bash 
+* 🔐 **Post-quantum signatures** using Dilithium / ML-DSA.
+* ⛏️ **SHA256d Proof-of-Work** mining.
+* 🧱 **Bitcoin Core–derived validation engine**.
+* 🧬 **PQ script validation** with Q-BitX-specific opcodes.
+* 👛 **Wallet/RPC helpers** for PQ address and spending workflows.
+* 🧾 **Native PQ witness support** scheduled at height `230000`.
+* 🧩 **No premine**, fixed 21M supply model.
+* 🛡️ Conservative network upgrades focused on consensus safety.
 
-### Download binaries
- 
+---
 
-sudo apt update 
-sudo apt install -y unzip wget 
-unzip qbitx-linux-x86_64.zip 
-chmod +x qbitx qbitx-cli 
-apt-get update 
-apt-get install -y libevent-2.1-7 
-apt-get update 
-apt-get install -y libleveldb1d 
-apt-get install -y libevent-pthreads-2.1-7t64 
+## What Q-BitX is
 
-### Create Configuration Directory
-mkdir -p ~/.qbitx 
+Q-BitX is a blockchain that:
 
+* mines blocks using SHA256d;
+* validates transactions using Bitcoin-style consensus logic;
+* supports post-quantum Dilithium / ML-DSA signatures;
+* experiments with PQ output types and native PQ witness transactions.
 
-cat > ~/.qbitx/qbitx.conf <<'EOF' 
+---
+
+## What Q-BitX is not
+
+Q-BitX is **not**:
+
+* a quantum computer miner;
+* a replacement for audited cryptographic standards;
+* a fully production-hardened wallet ecosystem;
+* financial advice;
+* guaranteed bug-free software.
+
+This is experimental mainnet software. Use it carefully and always back up your wallet.
+
+---
+
+## 📦 Downloads
+
+Latest release:
+
+```text
+https://github.com/q-bitx/Source-/releases/latest
+```
+
+Typical release files:
+
+```text
+qbitx-linux-x86_64.zip
+qbitx-windows-x86_64.zip
+qbitx.exe
+qbitx-cli.exe
+qbitx-gui.exe
+```
+
+---
+
+## 🐧 Quick start: Linux binary
+
+### 1. Install basic dependencies
+
+```bash
+sudo apt update
+sudo apt install -y unzip wget libevent-2.1-7 libevent-pthreads-2.1-7t64 libleveldb1d
+```
+
+On some Ubuntu versions, package names may differ slightly. If a package is unavailable, install the closest available `libevent` and `leveldb` runtime packages.
+
+### 2. Download and unpack
+
+```bash
+wget https://github.com/q-bitx/Source-/releases/latest/download/qbitx-linux-x86_64.zip
+unzip qbitx-linux-x86_64.zip
+chmod +x qbitx qbitx-cli
+```
+
+### 3. Create config
+
+```bash
+mkdir -p ~/.qbitx
+
+cat > ~/.qbitx/qbitx.conf <<'EOF'
 server=1
 daemon=0
 txindex=1
 
 rpcbind=127.0.0.1
 rpcallowip=127.0.0.1
+
 port=8334
 listen=1
-
-rpcuser=qbx 
-rpcpassword=qbxpass
-printtoconsole=0
 maxconnections=32
 
+rpcuser=qbx
+rpcpassword=qbxpass
+
+printtoconsole=0
 EOF
+```
 
-### run qbitx
-./qbitx 
+### 4. Start node
 
-### If the node is running correctly, you will see the current block height and network status.
-./qbitx-cli  getblockchaininfo 
+```bash
+./qbitx
+```
 
-### Create a New Wallet
-./qbitx-cli  createwallet "pqwallet" 
-./qbitx-cli  listwallets 
+In another terminal:
 
-### Generate wallet
-./qbitx-cli -rpcwallet=pqwallet getnewaddress "" pq 
-### balances
-./qbitx-cli -rpcwallet=pqwallet getaddressbalances 
+```bash
+./qbitx-cli getblockchaininfo
+```
 
-### Backup Your Wallet
-### The wallet stores a set of individual private keys.
-### The backup is wallet.dat with these keys.
-### All new addresses created after the backup will be lost
+---
 
-./qbitx-cli -rpcwallet=pqwallet backupwallet ~/.qbitx/backup_$(date +%Y%m%d_%H%M%S) 
+## 🪟 Quick start: Windows
 
-### restore wallet for example
-./qbitx-cli restorewallet pqwallet /home/sus/wallet/pqwallet 
+Download the Windows release package from:
 
-### For send coins 
-### there are three types of fee - low\normal\high
-./qbitx-cli -rpcwallet=pqwallet pqsendtoaddress"FROMYOURADDRESS"  "TOADDRESS" 5.0 normal 
+```text
+https://github.com/q-bitx/Source-/releases/latest
+```
+
+Typical files:
+
+```text
+qbitx.exe
+qbitx-cli.exe
+qbitx-gui.exe
+```
+
+PowerShell example:
+
+```powershell
+.\qbitx.exe --version
+.\qbitx-cli.exe --version
+```
+
+Default data directory:
+
+```text
+%APPDATA%\QBitX
+```
+
+Example config path:
+
+```text
+%APPDATA%\QBitX\qbitx.conf
+```
+
+---
+
+## 👛 Wallet usage
+
+### Create wallet
+
+```bash
+./qbitx-cli createwallet "pqwallet"
+./qbitx-cli listwallets
+```
+
+### Generate a PQ address
+
+```bash
+./qbitx-cli -rpcwallet=pqwallet getnewaddress "" pq
+```
+
+Depending on wallet settings and network rules, Q-BitX may return PQ-style addresses by default.
+
+### Check balances
+
+```bash
+./qbitx-cli -rpcwallet=pqwallet getbalances
+./qbitx-cli -rpcwallet=pqwallet getaddressbalances
+```
+
+### Send QBX with PQ helper
+
+Fee level examples:
+
+```text
+low
+normal
+high
+```
+
+Example:
+
+```bash
+./qbitx-cli -rpcwallet=pqwallet pqsendtoaddress "FROM_ADDRESS" "TO_ADDRESS" 5.0 normal
+```
+
+---
+
+## 💾 Wallet backup
+
+Always back up your wallet before receiving or mining coins.
+
+```bash
+./qbitx-cli -rpcwallet=pqwallet backupwallet ~/.qbitx/backup_$(date +%Y%m%d_%H%M%S)
+```
+
+Important:
+
+* The wallet contains private keys.
+* If you create new addresses after a backup, make a new backup.
+* Losing `wallet.dat` / wallet database files may permanently lose access to funds.
+* Never share your wallet backup or private keys.
+
+### Restore wallet example
+
+```bash
+./qbitx-cli restorewallet pqwallet /path/to/your/wallet_backup
+```
+
+---
+
+## 🛠️ Build from source: Linux
+
+### 1. Install build dependencies
+
+```bash
+sudo apt update
+sudo apt install -y \
+  build-essential \
+  cmake \
+  pkg-config \
+  python3 \
+  git \
+  libevent-dev \
+  libboost-dev \
+  libboost-system-dev \
+  libboost-filesystem-dev \
+  libboost-thread-dev \
+  libsqlite3-dev \
+  libssl-dev \
+  libminiupnpc-dev \
+  libnatpmp-dev
+```
+
+### 2. Clone repository
+
+```bash
+git clone https://github.com/q-bitx/Source-.git
+cd Source-
+```
+
+### 3. Build node and CLI
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build --target qbitx qbitx-cli -j$(nproc)
+```
+
+Binaries:
+
+```bash
+./build/qbitx --version
+./build/qbitx-cli --version
+```
+
+---
+
+## 🧪 Tests
+
+PQ-focused tests:
+
+```bash
+cmake --build build --target pq_tests -j$(nproc)
+./build/src/test/pq/pq_tests
+```
+
+Expected result:
+
+```text
+No errors detected
+```
+
+Some inherited Bitcoin Core tests may require additional build options and are not part of the default Q-BitX test path.
+
+---
+
+## ⛏️ Mining notes
+
+Q-BitX uses SHA256d Proof-of-Work.
+
+This means the hashing algorithm is Bitcoin-like, but Q-BitX has its own chain, consensus parameters, addresses and PQ transaction rules.
+
+Mining software and pools must follow current Q-BitX consensus rules, especially around:
+
+* height `220000` block limit / buried rule activation;
+* height `230000` PQ sigops and PQ witness activation;
+* transaction relay and block template rules.
+
+---
+
+## 🔐 Post-quantum design notes
+
+Q-BitX is built around a post-quantum transaction signature layer.
+
+Dilithium / ML-DSA signatures are integrated into script validation, enabling PQ-protected transaction outputs and spends while keeping the familiar Bitcoin-style UTXO model and SHA256d Proof-of-Work mining.
+
+Important distinction:
+
+```text
+SHA256d PoW protects block production and chain work.
+Dilithium / ML-DSA protects transaction ownership and spend authorization.
+```
+
+Q-BitX does not use “quantum mining”. The post-quantum design applies to signatures, wallet keys and transaction validation.
+
+Consensus upgrades are activated by predefined block heights to keep network transitions predictable for nodes, miners, pools and exchanges.
+
+
+---
+
+## 🌐 Network ports
+
+Default P2P port:
+
+```text
+8334
+```
+
+Default RPC is local-only unless explicitly configured otherwise.
+
+Recommended RPC security:
+
+```text
+rpcbind=127.0.0.1
+rpcallowip=127.0.0.1
+```
+
+Do not expose RPC publicly without proper firewalling, authentication and operational security.
+
+---
+
+## 🧭 Useful RPC commands
+
+```bash
+./qbitx-cli getblockchaininfo
+./qbitx-cli getnetworkinfo
+./qbitx-cli getpeerinfo
+./qbitx-cli getwalletinfo
+./qbitx-cli listwallets
+./qbitx-cli -rpcwallet=pqwallet getnewaddress "" pq
+./qbitx-cli -rpcwallet=pqwallet getbalances
+```
+
+---
+
+## ⚠️ Security warning
+
+Q-BitX is experimental blockchain software.
+
+Before running it in production-like environments:
+
+* back up wallets;
+* test upgrades on a separate node;
+* monitor consensus activation heights;
+* keep RPC private;
+* verify binaries and releases;
+* upgrade before mandatory activation heights.
+
+---
+
+## 📄 License
+
+Distributed under the MIT software license.
+
+See `COPYING` for details.
+
+---
+
+## 🤝 Contributing
+
+Issues, testing reports, build fixes and code reviews are welcome.
+
+Focus areas:
+
+* PQ wallet UX;
+* mining and pool compatibility;
+* relay / mempool testing;
+* Windows wallet packaging;
+* documentation;
+* post-quantum transaction workflows.
