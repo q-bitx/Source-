@@ -2704,6 +2704,10 @@ size_t static WitnessSigOps(int witversion, const std::vector<unsigned char>& wi
         }
     }
 
+    if (pq_sigops_active && witversion == 2 && witprogram.size() == WITNESS_V0_KEYHASH_SIZE) {
+        return 1;
+    }
+
     // Future flags may be implemented here.
     return 0;
 }

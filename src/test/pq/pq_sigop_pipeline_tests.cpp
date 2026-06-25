@@ -90,6 +90,19 @@ BOOST_AUTO_TEST_CASE(gettransactionsigopcost_counts_dilithium_paths)
                           MAX_PUBKEYS_PER_MULTISIG * WITNESS_SCALE_FACTOR);
         BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(creation_tx), coins, flags, false), 0);
     }
+
+    // D) Native PQ witness v2 keyhash (OP_2 <20-byte program>) counts one witness sigop when active.
+    {
+        const std::vector<unsigned char> program(20, 0xab);
+        CScript script_pub_key = CScript() << OP_2 << program;
+        CScriptWitness witness;
+        witness.stack.emplace_back(0);
+        witness.stack.emplace_back(0);
+        BuildTxs(spending_tx, coins, creation_tx, script_pub_key, CScript(), witness);
+
+        BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(spending_tx), coins, flags, true), 1);
+        BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(spending_tx), coins, flags, false), 0);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(pq_sigops_pre_post_activation_cost)

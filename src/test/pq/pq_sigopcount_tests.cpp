@@ -57,4 +57,13 @@ BOOST_AUTO_TEST_CASE(legacy_checksig_always_counts_with_or_without_pq_sigops)
     BOOST_CHECK_EQUAL(s.GetSigOpCount(true, true), 2U);
 }
 
+BOOST_AUTO_TEST_CASE(pqchecksigadd_counts_one_when_pq_sigops_active)
+{
+    CScript s;
+    s << OP_PQCHECKSIGADD;
+    BOOST_CHECK_EQUAL(s.GetSigOpCount(true, true), 1U);
+    BOOST_CHECK_EQUAL(s.GetSigOpCount(false, true), 1U);
+    BOOST_CHECK_EQUAL(s.GetSigOpCount(true, false), 0U);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -182,7 +182,7 @@ unsigned int CScript::GetSigOpCount(bool fAccurate, bool pq_sigops_active) const
             n++;
         }
         if (pq_sigops_active) {
-            if (opcode == OP_PQCHECKSIG || opcode == OP_PQCHECKSIGVERIFY ||
+            if (opcode == OP_PQCHECKSIG || opcode == OP_PQCHECKSIGVERIFY || opcode == OP_PQCHECKSIGADD ||
                 opcode == OP_CHECKSIGDILITHIUM || opcode == OP_CHECKSIGDILITHIUMVERIFY) {
                 n++;
             } else if (opcode == OP_CHECKMULTISIGDILITHIUM || opcode == OP_CHECKMULTISIGDILITHIUMVERIFY) {
