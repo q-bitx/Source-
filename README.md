@@ -120,20 +120,24 @@ mkdir -p ~/.qbitx
 
 cat > ~/.qbitx/qbitx.conf <<'EOF'
 server=1
-daemon=0
+daemon=1
 txindex=1
 
+# RPC только локально
 rpcbind=127.0.0.1
 rpcallowip=127.0.0.1
-
-port=8334
-listen=1
-maxconnections=32
-
 rpcuser=qbx
 rpcpassword=qbxpass
 
+# P2P
+listen=1
+discover=1
+port=8334
+maxconnections=64
+
+# Logs
 printtoconsole=0
+
 EOF
 ```
 
