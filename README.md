@@ -123,7 +123,7 @@ server=1
 daemon=1
 txindex=1
 
-# RPC только локально
+# RPC 
 rpcbind=127.0.0.1
 rpcallowip=127.0.0.1
 rpcuser=qbx
