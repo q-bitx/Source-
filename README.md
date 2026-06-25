@@ -52,7 +52,7 @@ Q-BitX is a blockchain that:
 * mines blocks using SHA256d;
 * validates transactions using Bitcoin-style consensus logic;
 * supports post-quantum Dilithium / ML-DSA signatures;
-* experiments with PQ output types and native PQ witness transactions.
+* PQ output types and native PQ witness transactions.
 
 ---
 
