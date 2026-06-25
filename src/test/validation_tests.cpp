@@ -372,14 +372,26 @@ BOOST_AUTO_TEST_CASE(pq_witness_chainparams_heights)
     BOOST_CHECK_EQUAL(reg_params->GetConsensus().nPQSigopsHeight, 1);
 }
 
-//! Mainnet must not retain inherited Bitcoin sync metadata (assumeutxo / chainTxData).
-BOOST_AUTO_TEST_CASE(sync_metadata_not_bitcoin_inherited)
+//! Active mainnet params must come from chainparams_main.cpp (Q-BitX), not stale duplicates.
+BOOST_AUTO_TEST_CASE(active_mainnet_chainparams_are_qbitx)
 {
     constexpr uint64_t BITCOIN_MAINNET_CHAIN_TX_COUNT = 1161875261;
     constexpr uint256 BITCOIN_MAINNET_ASSUMEUTXO_BLOCKHASH{
         "0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5"};
+    constexpr uint256 QBITX_MAINNET_GENESIS{
+        "407cdbc2ca102bd9e69069f25cebc2ef363a427166edba7580b41031b68549d9"};
+    constexpr uint256 STALE_KERNEL_CHAINPARAMS_GENESIS{
+        "00000000d95243b67e1e9ad6642129388be4db92278f2ff584acc1da061976a6"};
 
     const auto main_params = CreateChainParams(*m_node.args, ChainType::MAIN);
+    const auto& consensus = main_params->GetConsensus();
+
+    BOOST_CHECK_EQUAL(consensus.hashGenesisBlock, QBITX_MAINNET_GENESIS);
+    BOOST_CHECK_NE(consensus.hashGenesisBlock, STALE_KERNEL_CHAINPARAMS_GENESIS);
+
+    BOOST_CHECK_EQUAL(consensus.nPQSigopsHeight, 230000);
+    BOOST_CHECK_EQUAL(consensus.nPQWitnessHeight, 230000);
+    BOOST_CHECK_EQUAL(consensus.nBlockLimitsUpgradeHeight, 220000);
 
     BOOST_CHECK(!main_params->AssumeutxoForHeight(840'000));
     BOOST_CHECK(!main_params->AssumeutxoForHeight(880'000));
@@ -389,8 +401,8 @@ BOOST_AUTO_TEST_CASE(sync_metadata_not_bitcoin_inherited)
     BOOST_CHECK_NE(txdata.tx_count, BITCOIN_MAINNET_CHAIN_TX_COUNT);
     BOOST_CHECK_LT(txdata.tx_count, 1'000'000);
 
-    BOOST_CHECK(main_params->GetConsensus().nMinimumChainWork.IsNull());
-    BOOST_CHECK(main_params->GetConsensus().defaultAssumeValid.IsNull());
+    BOOST_CHECK(consensus.nMinimumChainWork.IsNull());
+    BOOST_CHECK(consensus.defaultAssumeValid.IsNull());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

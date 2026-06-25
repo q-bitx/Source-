@@ -30,7 +30,7 @@ Release Process
 
 * Update translations see [translation_process.md](/doc/translation_process.md#synchronising-translations).
 * Update hardcoded [seeds](/contrib/seeds/README.md), see [this pull request](https://github.com/bitcoin/bitcoin/pull/27488) for an example.
-* Update the following variables in [`src/kernel/chainparams.cpp`](/src/kernel/chainparams.cpp) for mainnet, testnet, and signet:
+* Update the following variables in [`src/kernel/chainparams_main.cpp`](/src/kernel/chainparams_main.cpp) for mainnet, testnet, and signet:
   - `m_assumed_blockchain_size` and `m_assumed_chain_state_size` with the current size plus some overhead (see
     [this](#how-to-calculate-assumed-blockchain-and-chain-state-size) for information on how to calculate them).
   - The following updates should be reviewed with `reindex-chainstate` and `assumevalid=0` to catch any defect

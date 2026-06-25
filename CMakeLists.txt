@@ -244,6 +244,7 @@ add_executable(qbitx
     src/pubkey.cpp
     src/support/lockedpool.cpp
     src/blockfilter.cpp
+    # Single source of truth for network parameters (qbitx + libbitcoinkernel).
     src/kernel/chainparams_main.cpp
     src/consensus/merkle.cpp
     src/util/bytevectorhash.cpp

@@ -1,6 +1,10 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2021 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
+//
+// Q-BitX network parameter definitions (single source of truth).
+// Compiled into qbitx/qbitx-cli and libbitcoinkernel (see CMakeLists.txt).
+// src/chainparams.cpp only provides CreateChainParams/SelectParams wiring.
 #include <kernel/chainparams.h>
 
 #include <chainparamsseeds.h>
@@ -529,7 +533,7 @@ public:
         consensus.BIP66Height = 1;  // Always active unless overridden
         consensus.CSVHeight = 1;    // Always active unless overridden
         consensus.SegwitHeight = 0; // Always active unless overridden
-        // Regtest PQ heights (must match chainparams.cpp CRegTestParams defaults).
+        // Regtest PQ heights (defaults for unit/functional tests).
         consensus.nPQSigopsHeight = 1;
         consensus.nPQWitnessHeight = 10;
         consensus.nBlockLimitsUpgradeHeight = 5;
