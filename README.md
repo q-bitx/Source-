@@ -52,21 +52,25 @@ Q-BitX is a blockchain that:
 * mines blocks using SHA256d;
 * validates transactions using Bitcoin-style consensus logic;
 * supports post-quantum Dilithium / ML-DSA signatures;
+* Replacement for audited cryptographic standards;
 * PQ output types and native PQ witness transactions.
 
 ---
 
 ## What Q-BitX is not
 
-Q-BitX is **not**:
+Q-BitX is not:
 
-* a quantum computer miner;
-* a replacement for audited cryptographic standards;
-* a fully production-hardened wallet ecosystem;
+* a “quantum mining” chain;
+* a centralized custody wallet;
+* a token running on another blockchain;
 * financial advice;
-* guaranteed bug-free software.
+* a promise of absolute security without proper wallet backups and node upgrades.
 
-This is experimental mainnet software. Use it carefully and always back up your wallet.
+Q-BitX is a standalone mainnet blockchain with post-quantum signature support built into transaction validation.
+
+Users, miners, pools and exchanges should keep nodes updated, monitor activation heights and always back up wallets.
+
 
 ---
 
