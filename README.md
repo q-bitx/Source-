@@ -4,10 +4,14 @@
 
 It keeps classic **SHA256d Proof-of-Work** mining while adding **Dilithium / ML-DSA post-quantum signatures** into script validation and wallet/RPC workflows.
 
-> **Network status:** Mainnet
-> **Consensus model:** SHA256d PoW + Dilithium / ML-DSA signatures
-> **Supply:** 21,000,000 QBX
-> **Premine:** No premine
+| Parameter           | Value                                       |
+| ------------------- | ------------------------------------------- |
+| **Network status**  | Mainnet                                     |
+| **Consensus model** | SHA256d PoW + Dilithium / ML-DSA signatures |
+| **Supply**          | 21,000,000 QBX                              |
+| **Premine**         | No premine                                  |
+
+
 
 ---
 
