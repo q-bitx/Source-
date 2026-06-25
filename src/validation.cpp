@@ -316,13 +316,18 @@ void Chainstate::MaybeUpdateMempoolForReorg(
     const int new_tip_height{new_tip ? new_tip->nHeight : -1};
     const bool witness_scale_changed{IsWitnessDiscountScaleChangedAcrossTips(consensus, old_tip_height, new_tip_height)};
     const bool pq_sigops_changed{IsPQSigopsActivationChangedAcrossTips(consensus, old_tip_height, new_tip_height)};
-    if (witness_scale_changed || pq_sigops_changed) {
+    const bool block_limits_changed{IsBlockLimitsUpgradeChangedAcrossTips(consensus, old_tip_height, new_tip_height)};
+    if (witness_scale_changed || pq_sigops_changed || block_limits_changed) {
         if (pq_sigops_changed) {
             LogPrintf("PQ sigops activation state changed across reorg; clearing mempool to avoid stale sigop cost/policy flags (old_next_height=%d new_next_height=%d)\n",
                       old_tip_height + 1, new_tip_height + 1);
         }
         if (witness_scale_changed) {
             LogPrintf("PQ witness activation state changed across reorg; clearing mempool to avoid stale witness discount scale/policy flags (old_next_height=%d new_next_height=%d)\n",
+                      old_tip_height + 1, new_tip_height + 1);
+        }
+        if (block_limits_changed) {
+            LogPrintf("Block limits upgrade state changed across reorg; clearing mempool (old_next_height=%d new_next_height=%d)\n",
                       old_tip_height + 1, new_tip_height + 1);
         }
         m_mempool->removeForReorg(m_chain, [](CTxMemPool::txiter) { return true; });
@@ -4373,8 +4378,18 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     // failed).
     const Consensus::Params& cparams{chainman.GetConsensus()};
     const int blk_wscale{GetWitnessDiscountScale(cparams, nHeight)};
-    if (GetBlockWeightWithScale(block, blk_wscale) > MAX_BLOCK_WEIGHT) {
+    const unsigned int max_block_weight{Consensus::GetMaxBlockWeight(cparams, nHeight)};
+    if (GetBlockWeightWithScale(block, blk_wscale) > max_block_weight) {
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-weight", strprintf("%s : weight limit failed", __func__));
+    }
+
+    if (Consensus::EnforcesBlockSerializedSizeLimit(cparams, nHeight)) {
+        const size_t block_serialized_size{::GetSerializeSize(TX_WITH_WITNESS(block))};
+        const unsigned int max_serialized_size{Consensus::GetMaxBlockSerializedSize(cparams, nHeight)};
+        if (block_serialized_size > max_serialized_size) {
+            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-serialized-size",
+                strprintf("%s : serialized size limit failed (%u > %u)", __func__, block_serialized_size, max_serialized_size));
+        }
     }
 
     return true;
@@ -5149,7 +5164,7 @@ void ChainstateManager::LoadExternalBlockFile(
 
     int nLoaded = 0;
     try {
-        BufferedFile blkdat{file_in, 2 * MAX_BLOCK_SERIALIZED_SIZE, MAX_BLOCK_SERIALIZED_SIZE + 8};
+        BufferedFile blkdat{file_in, 2 * MAX_BLOCK_DISK_SERIALIZED_SIZE, MAX_BLOCK_DISK_SERIALIZED_SIZE + 8};
         // nRewind indicates where to resume scanning in case something goes wrong,
         // such as a block fails to deserialize.
         uint64_t nRewind = blkdat.GetPos();
@@ -5171,7 +5186,7 @@ void ChainstateManager::LoadExternalBlockFile(
                 }
                 // read size
                 blkdat >> nSize;
-                if (nSize < 80 || nSize > MAX_BLOCK_SERIALIZED_SIZE)
+                if (nSize < 80 || nSize > MAX_BLOCK_DISK_SERIALIZED_SIZE)
                     continue;
             } catch (const std::exception&) {
                 // no valid block header found; don't complain

@@ -9,10 +9,27 @@
 #include <cstdlib>
 #include <stdint.h>
 
-/** The maximum allowed size for a serialized block, in bytes (only for buffer size limits) */
-static const unsigned int MAX_BLOCK_SERIALIZED_SIZE = 4000000;
-/** The maximum allowed weight for a block, see BIP 141 (network rule) */
-static const unsigned int MAX_BLOCK_WEIGHT = 16000000;
+/** BTQ-aligned block limits (active from nBlockLimitsUpgradeHeight onward). */
+static constexpr unsigned int QBX_MAX_BLOCK_WEIGHT = 8000000;
+static constexpr unsigned int QBX_MAX_BLOCK_SERIALIZED_SIZE = 8000000;
+
+/** Legacy pre-upgrade consensus limits (height < nBlockLimitsUpgradeHeight). */
+static constexpr unsigned int LEGACY_MAX_BLOCK_WEIGHT = 16000000;
+/** Pre-upgrade P2P / getblocktemplate serialized-size guidance (not a consensus rule). */
+static constexpr unsigned int LEGACY_MAX_BLOCK_P2P_SERIALIZED_SIZE = 4000000;
+
+/**
+ * Largest block that may be stored on disk or read during reindex.
+ * Pre-upgrade blocks had no consensus serialized-size cap; weight was capped at LEGACY_MAX_BLOCK_WEIGHT.
+ */
+static constexpr unsigned int MAX_BLOCK_DISK_SERIALIZED_SIZE = LEGACY_MAX_BLOCK_WEIGHT;
+
+/**
+ * Backward-compatible aliases: upper bound for buffers and context-free sanity checks.
+ * Height-aware consensus uses Consensus::GetMaxBlockWeight / GetMaxBlockSerializedSize.
+ */
+static const unsigned int MAX_BLOCK_SERIALIZED_SIZE = MAX_BLOCK_DISK_SERIALIZED_SIZE;
+static const unsigned int MAX_BLOCK_WEIGHT = LEGACY_MAX_BLOCK_WEIGHT;
 /** The maximum allowed number of signature check operations in a block (network rule) */
 static const int64_t MAX_BLOCK_SIGOPS_COST = 80000;
 /** Coinbase transaction outputs can only be spent after this number of new blocks (network rule) */

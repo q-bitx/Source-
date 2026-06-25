@@ -106,6 +106,8 @@ public:
         consensus.nPQSigopsHeight = 230000;
         // PQ native witness + k=16 weight discount (see consensus/params.h)
         consensus.nPQWitnessHeight = 230000;
+        // BTQ-aligned 8M weight / 8MB serialized block limits (see QBX_P0_BLOCK_LIMIT_FIX.md)
+        consensus.nBlockLimitsUpgradeHeight = 220000;
         consensus.nLWMAWindow = 18;
         consensus.fPowAllowMinDifficultyBlocks = false;
         consensus.enforce_BIP94 = false;
@@ -239,6 +241,7 @@ public:
         consensus.nLWMAHeight = 200001;
         consensus.nPQSigopsHeight = 230000;
         consensus.nPQWitnessHeight = 230000;
+        consensus.nBlockLimitsUpgradeHeight = 220000;
         consensus.nLWMAWindow = 18;
         consensus.fPowAllowMinDifficultyBlocks = true;
         consensus.enforce_BIP94 = false;
@@ -332,6 +335,7 @@ public:
         consensus.SegwitHeight = 1;
         consensus.nPQSigopsHeight = 230000;
         consensus.nPQWitnessHeight = 230000;
+        consensus.nBlockLimitsUpgradeHeight = 220000;
         consensus.MinBIP9WarningHeight = 0;
         consensus.powLimit = uint256{"00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 2016 * 150; // two weeks
@@ -471,6 +475,7 @@ public:
         consensus.SegwitHeight = 1;
         consensus.nPQSigopsHeight = 230000;
         consensus.nPQWitnessHeight = 230000;
+        consensus.nBlockLimitsUpgradeHeight = 220000;
         consensus.nPowTargetTimespan = 2016 * 150; // two weeks
         consensus.nPowTargetSpacing = 150;
         consensus.fPowAllowMinDifficultyBlocks = false;
@@ -554,6 +559,7 @@ public:
         // Regtest PQ heights (must match chainparams.cpp CRegTestParams defaults).
         consensus.nPQSigopsHeight = 1;
         consensus.nPQWitnessHeight = 10;
+        consensus.nBlockLimitsUpgradeHeight = 5;
         consensus.MinBIP9WarningHeight = 0;
         consensus.powLimit = uint256{"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 2016 * 150; // one day

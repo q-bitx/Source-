@@ -20,7 +20,7 @@ class CFeeRate;
 class CScript;
 
 /** Default for -blockmaxweight, which controls the range of block weights the mining code will create **/
-static constexpr unsigned int DEFAULT_BLOCK_MAX_WEIGHT{MAX_BLOCK_WEIGHT};
+static constexpr unsigned int DEFAULT_BLOCK_MAX_WEIGHT{QBX_MAX_BLOCK_WEIGHT};
 /** Default for -blockreservedweight **/
 static constexpr unsigned int DEFAULT_BLOCK_RESERVED_WEIGHT{8000};
 /** This accounts for the block header, var_int encoding of the transaction count and a minimally viable

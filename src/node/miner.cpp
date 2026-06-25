@@ -74,12 +74,11 @@ void RegenerateCommitments(CBlock& block, ChainstateManager& chainman)
 
 static BlockAssembler::Options ClampOptions(BlockAssembler::Options options)
 {
-    Assert(options.block_reserved_weight <= MAX_BLOCK_WEIGHT);
+    Assert(options.block_reserved_weight <= LEGACY_MAX_BLOCK_WEIGHT);
     Assert(options.block_reserved_weight >= MINIMUM_BLOCK_RESERVED_WEIGHT);
     Assert(options.coinbase_output_max_additional_sigops <= MAX_BLOCK_SIGOPS_COST);
-    // Limit weight to between block_reserved_weight and MAX_BLOCK_WEIGHT for sanity:
-    // block_reserved_weight can safely exceed -blockmaxweight, but the rest of the block template will be empty.
-    options.nBlockMaxWeight = std::clamp<size_t>(options.nBlockMaxWeight, options.block_reserved_weight, MAX_BLOCK_WEIGHT);
+    // Upper bound at legacy maximum; CreateNewBlock/TestPackage apply height-aware caps.
+    options.nBlockMaxWeight = std::clamp<size_t>(options.nBlockMaxWeight, options.block_reserved_weight, LEGACY_MAX_BLOCK_WEIGHT);
     return options;
 }
 
@@ -167,7 +166,12 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     pblocktemplate->vchCoinbaseCommitment = m_chainstate.m_chainman.GenerateCoinbaseCommitment(*pblock, pindexPrev);
 
     const int tmpl_wscale{GetWitnessDiscountScale(chainparams.GetConsensus(), nHeight)};
-    LogPrintf("CreateNewBlock(): block weight: %u txs: %u fees: %ld sigops %d\n", static_cast<unsigned>(GetBlockWeightWithScale(*pblock, tmpl_wscale)), nBlockTx, nFees, nBlockSigOpsCost);
+    const size_t block_serialized_size{::GetSerializeSize(TX_WITH_WITNESS(*pblock))};
+    LogPrintf("CreateNewBlock(): block serialized_size=%u bytes (max=%u), weight=%u txs=%u fees=%ld sigops=%d\n",
+              block_serialized_size,
+              Consensus::GetMaxBlockSerializedSize(chainparams.GetConsensus(), nHeight),
+              static_cast<unsigned>(GetBlockWeightWithScale(*pblock, tmpl_wscale)),
+              nBlockTx, nFees, nBlockSigOpsCost);
 
     // Fill in header
     pblock->hashPrevBlock  = pindexPrev->GetBlockHash();
@@ -206,11 +210,22 @@ bool BlockAssembler::TestPackage(uint64_t packageSize, int64_t packageSigOpsCost
 {
     // TODO: switch to weight-based accounting for packages instead of vsize-based accounting.
     const int pkg_wscale{GetWitnessDiscountScale(chainparams.GetConsensus(), nHeight)};
-    if (nBlockWeight + pkg_wscale * packageSize >= m_options.nBlockMaxWeight) {
+    const size_t weight_cap{std::min(
+        m_options.nBlockMaxWeight,
+        static_cast<size_t>(Consensus::GetMaxBlockWeight(chainparams.GetConsensus(), nHeight)))};
+    if (nBlockWeight + pkg_wscale * packageSize >= weight_cap) {
         return false;
     }
     if (nBlockSigOpsCost + packageSigOpsCost >= MAX_BLOCK_SIGOPS_COST) {
         return false;
+    }
+    if (Consensus::EnforcesBlockSerializedSizeLimit(chainparams.GetConsensus(), nHeight)) {
+        const size_t current_serialized{::GetSerializeSize(TX_WITH_WITNESS(pblocktemplate->block))};
+        const unsigned int max_serialized{Consensus::GetMaxBlockSerializedSize(chainparams.GetConsensus(), nHeight)};
+        // packageSize is vsize; use it as a conservative lower bound on added physical bytes.
+        if (current_serialized + packageSize > max_serialized) {
+            return false;
+        }
     }
     return true;
 }
@@ -395,7 +410,9 @@ void BlockAssembler::addPackageTxs(int& nPackagesSelected, int& nDescendantsUpda
             ++nConsecutiveFailed;
 
             if (nConsecutiveFailed > MAX_CONSECUTIVE_FAILURES && nBlockWeight >
-                    m_options.nBlockMaxWeight - m_options.block_reserved_weight) {
+                    std::min(m_options.nBlockMaxWeight,
+                             static_cast<size_t>(Consensus::GetMaxBlockWeight(chainparams.GetConsensus(), nHeight)))
+                    - m_options.block_reserved_weight) {
                 // Give up if we're close to full and haven't succeeded in a while
                 break;
             }

@@ -162,6 +162,14 @@ static inline bool IsPQSigopsActivationChangedAcrossTips(const Consensus::Params
     return old_active != new_active;
 }
 
+/** True when next-block block-limit upgrade state changes because tip crossed nBlockLimitsUpgradeHeight. */
+static inline bool IsBlockLimitsUpgradeChangedAcrossTips(const Consensus::Params& params, int old_tip_height, int new_tip_height)
+{
+    const bool old_upgraded = (old_tip_height + 1) >= params.nBlockLimitsUpgradeHeight;
+    const bool new_upgraded = (new_tip_height + 1) >= params.nBlockLimitsUpgradeHeight;
+    return old_upgraded != new_upgraded;
+}
+
 // Legacy scale-4 helpers (e.g. tests, contexts without a chain height).
 static inline int32_t GetTransactionWeight(const CTransaction& tx)
 {

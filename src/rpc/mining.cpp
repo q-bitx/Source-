@@ -1274,17 +1274,27 @@ static RPCHelpMan getblocktemplate()
     result.pushKV("mutable", std::move(aMutable));
     result.pushKV("noncerange", "00000000ffffffff");
     int64_t nSigOpLimit = MAX_BLOCK_SIGOPS_COST;
-    int64_t nSizeLimit = MAX_BLOCK_SERIALIZED_SIZE;
-    if (fPreSegWit) {
+    const int next_height = pindexPrev->nHeight + 1;
+    const bool limits_upgraded = Consensus::IsBlockLimitsUpgraded(consensusParams, next_height);
+    const bool pq_witness_next = Consensus::IsPQWitnessEnabled(consensusParams, next_height);
+    const unsigned int weight_limit = Consensus::GetMaxBlockWeight(consensusParams, next_height);
+    int64_t nSizeLimit;
+    if (limits_upgraded) {
+        nSizeLimit = QBX_MAX_BLOCK_SERIALIZED_SIZE;
+    } else if (fPreSegWit && !pq_witness_next) {
+        CHECK_NONFATAL(LEGACY_MAX_BLOCK_P2P_SERIALIZED_SIZE % WITNESS_SCALE_FACTOR == 0);
+        nSizeLimit = LEGACY_MAX_BLOCK_P2P_SERIALIZED_SIZE / WITNESS_SCALE_FACTOR;
+    } else {
+        nSizeLimit = LEGACY_MAX_BLOCK_P2P_SERIALIZED_SIZE;
+    }
+    if (fPreSegWit && !limits_upgraded && !pq_witness_next) {
         CHECK_NONFATAL(nSigOpLimit % WITNESS_SCALE_FACTOR == 0);
         nSigOpLimit /= WITNESS_SCALE_FACTOR;
-        CHECK_NONFATAL(nSizeLimit % WITNESS_SCALE_FACTOR == 0);
-        nSizeLimit /= WITNESS_SCALE_FACTOR;
     }
     result.pushKV("sigoplimit", nSigOpLimit);
     result.pushKV("sizelimit", nSizeLimit);
-    if (!fPreSegWit) {
-        result.pushKV("weightlimit", (int64_t)MAX_BLOCK_WEIGHT);
+    if (limits_upgraded || !fPreSegWit || pq_witness_next) {
+        result.pushKV("weightlimit", (int64_t)weight_limit);
     }
     result.pushKV("curtime", block.GetBlockTime());
     result.pushKV("bits", strprintf("%08x", block.nBits));

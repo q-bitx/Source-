@@ -100,6 +100,7 @@ public:
         consensus.nPQSigopsHeight = 230000;
         // PQ native witness + BTQ-style k=16 weight discount (hard fork)
         consensus.nPQWitnessHeight = 230000;
+        consensus.nBlockLimitsUpgradeHeight = 220000;
         consensus.powLimit = uint256{"00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 10 * 60;
@@ -206,7 +207,9 @@ public:
         consensus.SegwitHeight = 834624; // 00000000002b980fcd729daaa248fd9316a5200e9b367f4ff2c42453e84201ca
         consensus.MinBIP9WarningHeight = 836640; // segwit activation height + miner confirmation window
         consensus.nPQSigopsHeight = 230000;
+        // PQ native witness + k=16 weight discount (see consensus/params.h)
         consensus.nPQWitnessHeight = 230000;
+        consensus.nBlockLimitsUpgradeHeight = 220000;
         consensus.powLimit = uint256{"00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 10 * 60;
@@ -300,6 +303,7 @@ public:
         consensus.nPQSigopsHeight = 230000;
         // Same fork height as mainnet/testnet for Q-BitX public test networks
         consensus.nPQWitnessHeight = 230000;
+        consensus.nBlockLimitsUpgradeHeight = 220000;
         consensus.powLimit = uint256{"00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 10 * 60;
@@ -432,7 +436,9 @@ public:
         consensus.CSVHeight = 1;
         consensus.SegwitHeight = 1;
         consensus.nPQSigopsHeight = 230000;
+        // PQ native witness + k=16 weight discount (see consensus/params.h)
         consensus.nPQWitnessHeight = 230000;
+        consensus.nBlockLimitsUpgradeHeight = 220000;
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 10 * 60;
         consensus.fPowAllowMinDifficultyBlocks = false;
@@ -511,6 +517,7 @@ public:
         // Regtest PQ heights (must match chainparams_main.cpp CRegTestParams defaults).
         consensus.nPQSigopsHeight = 1;
         consensus.nPQWitnessHeight = 10;
+        consensus.nBlockLimitsUpgradeHeight = 5;
         consensus.MinBIP9WarningHeight = 0;
         consensus.powLimit = uint256{"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nPowTargetTimespan = 24 * 60 * 60; // one day

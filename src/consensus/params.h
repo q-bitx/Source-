@@ -6,6 +6,7 @@
 #ifndef BITCOIN_CONSENSUS_PARAMS_H
 #define BITCOIN_CONSENSUS_PARAMS_H
 
+#include <consensus/consensus.h>
 #include <uint256.h>
 
 #include <chrono>
@@ -129,6 +130,8 @@ struct Params {
     int nPQSigopsHeight{std::numeric_limits<int>::max()};
     /** Native Dilithium PQ witness (SCRIPT_VERIFY_PQ_WITNESS) and BTQ-style k=16 witness discount for block/tx weight */
     int nPQWitnessHeight{std::numeric_limits<int>::max()};
+    /** BTQ-aligned 8M weight / 8MB serialized block limits activate at this height (QBX_BLOCK_LIMITS_UPGRADE_HEIGHT). */
+    int nBlockLimitsUpgradeHeight{std::numeric_limits<int>::max()};
     /** LWMA window size (number of prior inter-block intervals) */
     int nLWMAWindow{18};
     std::chrono::seconds PowTargetSpacing() const
@@ -174,6 +177,34 @@ struct Params {
 inline bool IsPQWitnessEnabled(const Params& params, int height)
 {
     return height >= params.nPQWitnessHeight;
+}
+
+/** True if BTQ-aligned 8M weight / 8MB serialized block limits apply at \p height. */
+inline bool IsBlockLimitsUpgraded(const Params& params, int height)
+{
+    return height >= params.nBlockLimitsUpgradeHeight;
+}
+
+/** Consensus max block weight at \p height (16M before upgrade, 8M after). */
+inline unsigned int GetMaxBlockWeight(const Params& params, int height)
+{
+    return IsBlockLimitsUpgraded(params, height) ? QBX_MAX_BLOCK_WEIGHT : LEGACY_MAX_BLOCK_WEIGHT;
+}
+
+/**
+ * Max serialized block size at \p height for consensus (post-upgrade) or P2P/GBT (pre-upgrade).
+ * Pre-upgrade has no consensus serialized-size rule; returns LEGACY_MAX_BLOCK_P2P_SERIALIZED_SIZE.
+ */
+inline unsigned int GetMaxBlockSerializedSize(const Params& params, int height)
+{
+    return IsBlockLimitsUpgraded(params, height) ? QBX_MAX_BLOCK_SERIALIZED_SIZE
+                                                 : LEGACY_MAX_BLOCK_P2P_SERIALIZED_SIZE;
+}
+
+/** True when consensus enforces GetMaxBlockSerializedSize on blocks at \p height. */
+inline bool EnforcesBlockSerializedSizeLimit(const Params& params, int height)
+{
+    return IsBlockLimitsUpgraded(params, height);
 }
 
 } // namespace Consensus

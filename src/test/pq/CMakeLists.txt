@@ -34,6 +34,7 @@ add_executable(pq_tests
   pq_solver_policy_tests.cpp
   pq_sigpolicy_reject_tests.cpp
   pq_witness_activation_tests.cpp
+  pq_block_limits_tests.cpp
 
   # Dilithium (C)
   ../../crypto/dilithium/sign.c

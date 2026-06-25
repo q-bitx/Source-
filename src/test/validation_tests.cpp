@@ -365,6 +365,7 @@ BOOST_AUTO_TEST_CASE(pq_witness_chainparams_heights)
     const auto main_params = CreateChainParams(*m_node.args, ChainType::MAIN);
     BOOST_CHECK_EQUAL(main_params->GetConsensus().nPQWitnessHeight, 230000);
     BOOST_CHECK_EQUAL(main_params->GetConsensus().nPQSigopsHeight, 230000);
+    BOOST_CHECK_EQUAL(main_params->GetConsensus().nBlockLimitsUpgradeHeight, 220000);
 
     const auto reg_params = CreateChainParams(*m_node.args, ChainType::REGTEST);
     BOOST_CHECK_EQUAL(reg_params->GetConsensus().nPQWitnessHeight, 10);
