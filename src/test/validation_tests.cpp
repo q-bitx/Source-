@@ -405,4 +405,33 @@ BOOST_AUTO_TEST_CASE(active_mainnet_chainparams_are_qbitx)
     BOOST_CHECK(consensus.defaultAssumeValid.IsNull());
 }
 
+BOOST_AUTO_TEST_CASE(mainnet_buried_deployments_before_pq_witness)
+{
+    constexpr int SCHEDULE_HEIGHT = 220000;
+    constexpr uint256 BITCOIN_BIP34_HASH{
+        "000000000000024b89b42a942fe0d9fea3bb44ab7bd1b19115dd6a759c0808b8"};
+
+    const auto main_params = CreateChainParams(*m_node.args, ChainType::MAIN);
+    const auto& c = main_params->GetConsensus();
+
+    BOOST_CHECK_EQUAL(c.BIP34Height, SCHEDULE_HEIGHT);
+    BOOST_CHECK_EQUAL(c.BIP65Height, SCHEDULE_HEIGHT);
+    BOOST_CHECK_EQUAL(c.BIP66Height, SCHEDULE_HEIGHT);
+    BOOST_CHECK_EQUAL(c.CSVHeight, SCHEDULE_HEIGHT);
+    BOOST_CHECK_EQUAL(c.SegwitHeight, SCHEDULE_HEIGHT);
+
+    BOOST_CHECK_GE(c.BIP34Height, SCHEDULE_HEIGHT);
+    BOOST_CHECK_NE(c.BIP34Height, 227931);
+    BOOST_CHECK_NE(c.SegwitHeight, 481824);
+
+    BOOST_CHECK(c.BIP34Hash.IsNull());
+    BOOST_CHECK_NE(c.BIP34Hash, BITCOIN_BIP34_HASH);
+
+    BOOST_CHECK_EQUAL(c.nBlockLimitsUpgradeHeight, SCHEDULE_HEIGHT);
+    BOOST_CHECK_LE(c.nBlockLimitsUpgradeHeight, c.nPQWitnessHeight);
+    BOOST_CHECK_LE(c.SegwitHeight, c.nPQWitnessHeight);
+    BOOST_CHECK_EQUAL(c.nPQSigopsHeight, 230000);
+    BOOST_CHECK_EQUAL(c.nPQWitnessHeight, 230000);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
