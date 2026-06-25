@@ -1,6 +1,6 @@
 # ⚛️ Q-BitX (QBX)
 
-**Q-BitX (QBX)** is a next-generation Proof-of-Work blockchain built for long-term security in the post-quantum era with the SHA256d Proof-of-Work consensus algorithm and built-in support for Dilithium/ML-DSA post-quantum signatures, designed for long-term protection of transactions and digital assets.
+**Q-BitX (QBX)** is a next-generation Proof-of-Work blockchain built for long-term security in the post-quantum era.
 
 It keeps classic **SHA256d Proof-of-Work** mining while adding **Dilithium / ML-DSA post-quantum signatures** into script validation and wallet/RPC workflows.
 
