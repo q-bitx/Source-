@@ -108,8 +108,8 @@ On some Ubuntu versions, package names may differ slightly. If a package is unav
 ### 2. Download and unpack
 
 ```bash
-wget https://github.com/q-bitx/Source-/releases/latest/download/qbitx-linux-x86_64.zip
-unzip qbitx-linux-x86_64.zip
+wget https://github.com/q-bitx/Source-/releases/download/v0.3.1/qbitx-v0.3.1-linux.gz
+unzip qbitx-linux-x86_64.gz
 chmod +x qbitx qbitx-cli
 ```
 
