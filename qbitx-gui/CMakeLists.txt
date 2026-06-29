@@ -20,7 +20,7 @@ if(QBITX_GUI_DISABLE_VULKAN OR CMAKE_CROSSCOMPILING)
     set(CMAKE_DISABLE_FIND_PACKAGE_Vulkan ON CACHE BOOL "Disable Vulkan for this build" FORCE)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Widgets Network)
 qt_add_executable(qbitx-gui
     main.cpp
     settingsmanager.h
@@ -35,6 +35,18 @@ qt_add_executable(qbitx-gui
     clirunner.cpp
     logmanager.h
     logmanager.cpp
+    nodemanager.h
+    nodemanager.cpp
+    clipathutil.h
+    clipathutil.cpp
+    qbitxembedded.h
+    qbitxembedded.cpp
+    rpcwalletbootstrap.h
+    rpcwalletbootstrap.cpp
+    traymanager.h
+    traymanager.cpp
+    appinstance.h
+    appinstance.cpp
     qml.qrc
 )
 
@@ -50,4 +62,10 @@ target_link_libraries(qbitx-gui
         Qt6::Quick
         Qt6::Qml
         Qt6::Widgets
+        Qt6::Network
 )
+
+if(WIN32)
+    set_target_properties(qbitx-gui PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_sources(qbitx-gui PRIVATE app_icon.rc)
+endif()

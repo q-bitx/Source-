@@ -1,23 +1,36 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import "../components" 1.0
+import "../theme" 1.0
 
 Page {
     id: sendPage
+    background: Rectangle { color: "transparent" }
 
-    property var addressBalances: []
-    property bool isLoading: false
+    property var fundedFromAddresses: []
+    property bool isLoadingBalances: false
+    property bool isSending: false
     property bool walletBusy: walletManager ? walletManager.walletBusy : false
     property bool hasWallet: walletManager && walletManager.wallets ? walletManager.wallets.length > 0 : false
     property string selectedWallet: ""
     property string resultLog: ""
     property string lastCmdLine: ""
     property bool pendingSend: false
+    property string pendingSendTag: ""
     property string fromBalanceText: ""
     property bool fromBalanceError: false
-    property int fromBalanceRequestId: 0
+
+    readonly property var amountFormatRe: /^\s*(?:0|[1-9]\d*)(?:[.,]\d{0,8})?\s*$/
+    // Dual-RPC load state (same merge approach as Addresses page)
+    property var _recvListResult: null
+    property var _balListResult: null
+    property bool _recvDone: false
+    property bool _balDone: false
+    property string _loadWalletTag: ""
 
     readonly property var feeModeValues: ["low", "normal", "high"]
+    readonly property bool isLoading: isSending
 
     function formatQbx(n) {
         if (n === undefined || n === null || isNaN(n)) return "0"
@@ -28,53 +41,227 @@ Page {
         return s
     }
 
+    function addressTotal(b) {
+        if (!b) return 0
+        var c = (b.confirmed !== undefined) ? Number(b.confirmed) : 0
+        var u = (b.unconfirmed !== undefined) ? Number(b.unconfirmed) : 0
+        var im = (b.immature !== undefined) ? Number(b.immature) : 0
+        if (isNaN(c)) c = 0
+        if (isNaN(u)) u = 0
+        if (isNaN(im)) im = 0
+        return c + u + im
+    }
+
+    function shortAddress(addr) {
+        if (!addr || typeof addr !== "string")
+            return ""
+        if (addr.length <= 20)
+            return addr
+        return addr.slice(0, 10) + "…" + addr.slice(-8)
+    }
+
+    function buildFromAddressLabel(entry) {
+        if (!entry || !entry.address)
+            return ""
+        return shortAddress(entry.address) + " — " + formatQbx(addressTotal(entry)) + " QBX"
+    }
+
+    function parseBalanceFields(bal) {
+        if (!bal || typeof bal !== "object")
+            return { confirmed: 0, unconfirmed: 0, immature: 0, utxos: 0 }
+
+        function toNum(v) {
+            if (v === undefined || v === null || v === "")
+                return 0
+            var s = (typeof v === "string") ? String(v).replace(/\s*QBX\s*$/gi, "").trim() : String(v)
+            var n = parseFloat(s)
+            return isNaN(n) ? 0 : n
+        }
+
+        var c = toNum(bal.confirmed)
+        var u = toNum(bal.unconfirmed)
+        var im = toNum(bal.immature)
+        return {
+            confirmed: c,
+            unconfirmed: u,
+            immature: im,
+            utxos: bal.utxos !== undefined ? bal.utxos : (bal.utxo_count !== undefined ? bal.utxo_count : 0)
+        }
+    }
+
+    function resetLoadState(walletTag) {
+        _recvListResult = null
+        _balListResult = null
+        _recvDone = false
+        _balDone = false
+        _loadWalletTag = walletTag
+    }
+
+    function mergeAddressEntries(receiveList, balanceList) {
+        var balanceMap = {}
+        if (Array.isArray(balanceList)) {
+            for (var i = 0; i < balanceList.length; i++) {
+                var b = balanceList[i]
+                if (b && b.address)
+                    balanceMap[b.address] = b
+            }
+        }
+
+        var merged = []
+        var seen = {}
+
+        function pushEntry(addr, bal) {
+            var parsed = parseBalanceFields(bal)
+            merged.push({
+                address: addr,
+                confirmed: parsed.confirmed,
+                unconfirmed: parsed.unconfirmed,
+                immature: parsed.immature
+            })
+        }
+
+        if (Array.isArray(receiveList)) {
+            for (var j = 0; j < receiveList.length; j++) {
+                var entry = receiveList[j]
+                var addr = (entry && entry.address) ? entry.address : (typeof entry === "string" ? entry : "")
+                if (!addr || seen[addr])
+                    continue
+                seen[addr] = true
+                pushEntry(addr, balanceMap[addr])
+            }
+        }
+
+        if (Array.isArray(balanceList)) {
+            for (var k = 0; k < balanceList.length; k++) {
+                var b2 = balanceList[k]
+                if (b2 && b2.address && !seen[b2.address]) {
+                    seen[b2.address] = true
+                    pushEntry(b2.address, b2)
+                }
+            }
+        }
+
+        return merged
+    }
+
+    function applyFundedFromAddresses(mergedList) {
+        var funded = []
+        for (var i = 0; i < mergedList.length; i++) {
+            var e = mergedList[i]
+            if (e && e.address && addressTotal(e) > 0) {
+                funded.push({
+                    address: e.address,
+                    confirmed: e.confirmed,
+                    unconfirmed: e.unconfirmed,
+                    immature: e.immature,
+                    label: buildFromAddressLabel(e)
+                })
+            }
+        }
+        fundedFromAddresses = funded
+        fromBalanceError = false
+        selectDefaultFromAddress()
+        updateFromBalanceText()
+    }
+
+    function tryApplyMergedAddresses() {
+        if (!_recvDone || !_balDone)
+            return
+        if (_loadWalletTag !== selectedWallet)
+            return
+
+        var balanceList = []
+        if (_balListResult && typeof _balListResult === "object" && _balListResult.by_address !== undefined)
+            balanceList = (_balListResult.by_address instanceof Array) ? _balListResult.by_address : []
+
+        var receiveList = (_recvListResult instanceof Array) ? _recvListResult : []
+        applyFundedFromAddresses(mergeAddressEntries(receiveList, balanceList))
+        isLoadingBalances = false
+    }
+
+    function selectDefaultFromAddress() {
+        Qt.callLater(function() {
+            if (fundedFromAddresses.length === 0) {
+                fromAddressCombo.currentIndex = -1
+                return
+            }
+            if (fundedFromAddresses.length === 1) {
+                fromAddressCombo.currentIndex = 0
+                updateFromBalanceText()
+                return
+            }
+            var bestIdx = 0
+            var bestTotal = addressTotal(fundedFromAddresses[0])
+            for (var i = 1; i < fundedFromAddresses.length; i++) {
+                var t = addressTotal(fundedFromAddresses[i])
+                if (t > bestTotal) {
+                    bestTotal = t
+                    bestIdx = i
+                }
+            }
+            fromAddressCombo.currentIndex = bestIdx
+            updateFromBalanceText()
+        })
+    }
+
     function updateFromBalanceText() {
         if (fromBalanceError) {
-            fromBalanceText = "From balance: (failed to load)"
+            fromBalanceText = "Balance unavailable"
             return
         }
         var addr = getFromAddress()
         if (!addr || addr === "") {
-            fromBalanceText = "From balance: (select an address)"
+            fromBalanceText = fundedFromAddresses.length === 0 && selectedWallet !== "" && !isLoadingBalances
+                    ? "No funded addresses found for this wallet."
+                    : "Select a from address"
             return
         }
-        for (var i = 0; i < addressBalances.length; i++) {
-            var b = addressBalances[i]
+        for (var i = 0; i < fundedFromAddresses.length; i++) {
+            var b = fundedFromAddresses[i]
             if (b && b.address === addr) {
                 var c = (b.confirmed !== undefined) ? b.confirmed : 0
                 var u = (b.unconfirmed !== undefined) ? b.unconfirmed : 0
                 var im = (b.immature !== undefined) ? b.immature : 0
                 var t = c + u + im
-                fromBalanceText = "From balance: Confirmed: " + formatQbx(c) + " QBX | Unconfirmed: " + formatQbx(u) + " QBX | Immature: " + formatQbx(im) + " QBX | Total: " + formatQbx(t) + " QBX"
+                fromBalanceText = "Confirmed " + formatQbx(c) + " · Unconfirmed " + formatQbx(u) + " · Total " + formatQbx(t) + " QBX"
                 return
             }
         }
-        fromBalanceText = "From balance: (address not in wallet list)"
-    }
-
-    function refreshFromBalance() {
-        fromBalanceError = false
-        updateFromBalanceText()
+        fromBalanceText = "Address not found in wallet"
     }
 
     function loadAddressBalances() {
         if (!settingsManager || settingsManager.qbitxCliPath === "")
             return
-        if (selectedWallet === "")
+        if (selectedWallet === "") {
+            fundedFromAddresses = []
+            updateFromBalanceText()
             return
+        }
         if (walletBusy)
             return
-        cliBridge.callNamed("getaddressbalances", {
+
+        isLoadingBalances = true
+        fromBalanceError = false
+        fundedFromAddresses = []
+        resetLoadState(selectedWallet)
+
+        cliBridge.callNamedWithTag("listreceivedbyaddress", {
             "minconf": 0,
+            "include_empty": true
+        }, selectedWallet, "sendrecv:" + selectedWallet)
+
+        cliBridge.callNamedWithTag("getaddressbalances", {
+            "minconf": 1,
             "include_unsafe": true
-        }, selectedWallet)
+        }, selectedWallet, "sendbal:" + selectedWallet)
     }
 
     function getFromAddress() {
-        var t = fromAddressCombo.currentText ? fromAddressCombo.currentText.trim() : ""
-        if (t === "" && fromAddressCombo.editText !== undefined)
-            t = fromAddressCombo.editText.trim()
-        return t
+        if (fromAddressCombo.currentIndex >= 0
+                && fromAddressCombo.currentIndex < fundedFromAddresses.length)
+            return fundedFromAddresses[fromAddressCombo.currentIndex].address
+        return ""
     }
 
     function getFeeMode() {
@@ -82,12 +269,114 @@ Page {
         return (i >= 0 && i < feeModeValues.length) ? feeModeValues[i] : "normal"
     }
 
-    function isAmountValid() {
-        var a = amountField.text ? amountField.text.trim() : ""
-        if (a === "")
+    function normalizedAmountText() {
+        return amountField.text ? amountField.text.trim().replace(",", ".") : ""
+    }
+
+    function parsedAmount() {
+        var t = normalizedAmountText()
+        if (t === "")
+            return NaN
+        return parseFloat(t)
+    }
+
+    function getSelectedFromBalance() {
+        var addr = getFromAddress()
+        for (var i = 0; i < fundedFromAddresses.length; i++) {
+            var b = fundedFromAddresses[i]
+            if (b && b.address === addr)
+                return addressTotal(b)
+        }
+        return NaN
+    }
+
+    function amountFormatLooksValid(text) {
+        var t = text ? text.trim() : ""
+        if (t === "")
             return false
-        var n = parseFloat(a)
-        return !isNaN(n) && n > 0
+        if (!amountFormatRe.test(t))
+            return false
+
+        var dotCount = (t.match(/\./g) || []).length
+        var commaCount = (t.match(/,/g) || []).length
+        if (dotCount + commaCount > 1)
+            return false
+
+        var norm = t.replace(",", ".")
+        if (norm.indexOf(".") < 0 && /^0\d+/.test(norm))
+            return false
+        if (/^0+\d/.test(norm) && norm.charAt(1) !== ".")
+            return false
+
+        return true
+    }
+
+    function isValidAmount() {
+        if (!amountFormatLooksValid(amountField.text))
+            return false
+        var n = parsedAmount()
+        if (isNaN(n) || n <= 0)
+            return false
+
+        var norm = normalizedAmountText()
+        var dotIdx = norm.indexOf(".")
+        if (dotIdx >= 0 && norm.length - dotIdx - 1 > 8)
+            return false
+
+        var bal = getSelectedFromBalance()
+        if (!isNaN(bal) && n > bal + 1e-12)
+            return false
+
+        return true
+    }
+
+    function amountErrorText() {
+        var t = amountField.text ? amountField.text.trim() : ""
+        if (t === "")
+            return ""
+
+        if (!amountFormatLooksValid(t))
+            return "Enter a valid amount, for example 0.001"
+
+        var n = parsedAmount()
+        if (isNaN(n) || n <= 0)
+            return "Enter a valid amount, for example 0.001"
+
+        var norm = normalizedAmountText()
+        var dotIdx = norm.indexOf(".")
+        if (dotIdx >= 0 && norm.length - dotIdx - 1 > 8)
+            return "Enter a valid amount, for example 0.001"
+
+        var bal = getSelectedFromBalance()
+        if (!isNaN(bal) && n > bal + 1e-12)
+            return "Amount exceeds selected address balance"
+
+        return ""
+    }
+
+    function simplifyCliError(errorMessage) {
+        if (!errorMessage || errorMessage === "")
+            return "Transaction failed."
+        var lines = errorMessage.split("\n")
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim()
+            if (line === "")
+                continue
+            if (line.toLowerCase().indexOf("invalid amount") >= 0)
+                return "Invalid amount"
+            if (line.toLowerCase().indexOf("error message:") >= 0 && i + 1 < lines.length) {
+                var next = lines[i + 1].trim()
+                if (next !== "")
+                    return next
+            }
+        }
+        return lines[0] ? lines[0].trim() : errorMessage
+    }
+
+    function resetSendingState() {
+        pendingSend = false
+        pendingSendTag = ""
+        isSending = false
     }
 
     function sendTransaction() {
@@ -95,7 +384,6 @@ Page {
             return
         var fromAddr = getFromAddress()
         var toAddr = toAddressField.text ? toAddressField.text.trim() : ""
-        var amountStr = amountField.text ? amountField.text.trim() : ""
         var feeMode = getFeeMode()
         if (fromAddr === "") {
             resultLog = "ERROR\nFrom address is required."
@@ -105,8 +393,10 @@ Page {
             resultLog = "ERROR\nTo address is required."
             return
         }
-        if (!isAmountValid()) {
-            resultLog = "ERROR\nAmount must be a number greater than 0."
+        var amountErr = amountErrorText()
+        if (amountErr !== "" || !isValidAmount()) {
+            resultLog = "ERROR\n" + (amountErr !== "" ? amountErr : "Enter a valid amount, for example 0.001")
+            resetSendingState()
             return
         }
         if (selectedWallet === "") {
@@ -114,19 +404,59 @@ Page {
             return
         }
 
-        lastCmdLine = "qbitx-cli -rpcwallet=" + selectedWallet + " pqsendtoaddress \"" + fromAddr + "\" \"" + toAddr + "\" " + amountStr + " " + feeMode
-        resultLog = "CMD: " + lastCmdLine
-        isLoading = true
+        var normalizedAmount = normalizedAmountText()
+        lastCmdLine = "qbitx-cli -rpcwallet=" + selectedWallet + " pqsendtoaddress \"" + fromAddr + "\" \"" + toAddr + "\" " + normalizedAmount + " " + feeMode
+        resultLog = "Sending transaction…"
+        pendingSendTag = "pqsend:" + selectedWallet
         pendingSend = true
-        cliBridge.call("pqsendtoaddress", [fromAddr, toAddr, amountStr, feeMode], selectedWallet)
+        isSending = true
+        cliBridge.callWithTag("pqsendtoaddress", [fromAddr, toAddr, normalizedAmount, feeMode], selectedWallet, pendingSendTag)
+    }
+
+    function syncWalletFromCombo() {
+        if (sendWalletCombo.currentIndex >= 0
+                && walletManager
+                && walletManager.wallets
+                && sendWalletCombo.currentIndex < walletManager.wallets.length) {
+            var w = walletManager.wallets[sendWalletCombo.currentIndex]
+            if (w !== selectedWallet) {
+                selectedWallet = w
+                loadAddressBalances()
+            } else if (fundedFromAddresses.length === 0 && !isLoadingBalances) {
+                loadAddressBalances()
+            }
+        } else if (sendWalletCombo.currentIndex < 0) {
+            selectedWallet = ""
+            fundedFromAddresses = []
+            updateFromBalanceText()
+        }
+    }
+
+    function refresh() {
+        if (selectedWallet !== "")
+            loadAddressBalances()
+        else if (walletManager && walletManager.wallets && walletManager.wallets.length > 0)
+            sendWalletCombo.currentIndex = 0
     }
 
     Connections {
         target: cliBridge
         function onSuccess(result) {
-            if (pendingSend) {
-                pendingSend = false
-                isLoading = false
+            if (!(pendingSend || isSending))
+                return
+            resetSendingState()
+            var txid = ""
+            if (typeof result === "string")
+                txid = result
+            else if (result && typeof result === "object" && result.txid !== undefined)
+                txid = result.txid
+            else
+                txid = (result && result.txid) ? result.txid : JSON.stringify(result)
+            resultLog = "SUCCESS\nTXID:\n" + txid
+        }
+        function onSuccessWithTag(result, tag) {
+            if (tag === pendingSendTag && (pendingSend || isSending)) {
+                resetSendingState()
                 var txid = ""
                 if (typeof result === "string")
                     txid = result
@@ -134,237 +464,336 @@ Page {
                     txid = result.txid
                 else
                     txid = (result && result.txid) ? result.txid : JSON.stringify(result)
-                resultLog = resultLog + "\n\nSUCCESS\nTXID: " + txid
+                resultLog = "SUCCESS\nTXID:\n" + txid
                 return
             }
-            if (result && typeof result === "object" && result.by_address !== undefined) {
-                addressBalances = (result.by_address instanceof Array) ? result.by_address : []
-                if (addressBalances.length > 0 && (!fromAddressCombo.currentText || fromAddressCombo.currentText.trim() === ""))
-                    fromAddressCombo.currentIndex = 0
-                fromBalanceError = false
-                updateFromBalanceText()
+            if (selectedWallet === "")
+                return
+            if (tag === "sendrecv:" + selectedWallet) {
+                _recvListResult = (result instanceof Array) ? result : []
+                _recvDone = true
+                tryApplyMergedAddresses()
+                return
+            }
+            if (tag === "sendbal:" + selectedWallet) {
+                _balListResult = result
+                _balDone = true
+                tryApplyMergedAddresses()
+                return
             }
         }
         function onErrorOccurred(errorMessage) {
-            if (pendingSend) {
-                pendingSend = false
-                isLoading = false
-                resultLog = resultLog + "\n\nERROR\n" + errorMessage
-            } else {
+            if (!(pendingSend || isSending))
+                return
+            resetSendingState()
+            resultLog = "ERROR\n" + simplifyCliError(errorMessage)
+        }
+        function onErrorOccurredWithTag(errorMessage, tag) {
+            if (tag === pendingSendTag && (pendingSend || isSending)) {
+                resetSendingState()
+                resultLog = "ERROR\n" + simplifyCliError(errorMessage)
+                return
+            }
+            if (selectedWallet === "")
+                return
+            if (tag === "sendrecv:" + selectedWallet) {
+                _recvListResult = []
+                _recvDone = true
+                tryApplyMergedAddresses()
+                return
+            }
+            if (tag === "sendbal:" + selectedWallet) {
+                _balListResult = { by_address: [] }
+                _balDone = true
                 fromBalanceError = true
-                if (resultLog !== "")
-                    resultLog = resultLog + "\n\n"
-                resultLog = resultLog + "ERROR (from balance): " + errorMessage
+                resultLog = "ERROR (balance load): " + errorMessage
+                tryApplyMergedAddresses()
                 updateFromBalanceText()
             }
         }
-    }
-
-    function refresh() {
-        if (selectedWallet !== "")
-            loadAddressBalances()
     }
 
     Connections {
         target: walletManager
         function onLoadedWalletsChanged() {
-            if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && sendWalletCombo.currentIndex < 0)
-                sendWalletCombo.currentIndex = 0
+            Qt.callLater(function() {
+                if (walletManager && walletManager.wallets && walletManager.wallets.length > 0) {
+                    if (selectedWallet !== "") {
+                        var idx = walletManager.wallets.indexOf(selectedWallet)
+                        if (idx >= 0 && sendWalletCombo.currentIndex !== idx)
+                            sendWalletCombo.currentIndex = idx
+                    } else if (sendWalletCombo.currentIndex < 0) {
+                        sendWalletCombo.currentIndex = 0
+                    }
+                }
+                syncWalletFromCombo()
+            })
+        }
+        function onWalletsChanged() {
+            Qt.callLater(function() {
+                if (!walletManager || !walletManager.wallets || walletManager.wallets.length === 0) {
+                    selectedWallet = ""
+                    fundedFromAddresses = []
+                    updateFromBalanceText()
+                    return
+                }
+                if (selectedWallet !== "") {
+                    var idx = walletManager.wallets.indexOf(selectedWallet)
+                    if (idx >= 0) {
+                        if (sendWalletCombo.currentIndex !== idx)
+                            sendWalletCombo.currentIndex = idx
+                    } else if (sendWalletCombo.currentIndex < 0) {
+                        sendWalletCombo.currentIndex = 0
+                    }
+                } else if (sendWalletCombo.currentIndex < 0) {
+                    sendWalletCombo.currentIndex = 0
+                }
+                syncWalletFromCombo()
+            })
+        }
+    }
+
+    Connections {
+        target: rpcBootstrap
+        function onRpcReadyChanged() {
+            if (rpcBootstrap && rpcBootstrap.rpcReady)
+                Qt.callLater(refresh)
         }
     }
 
     Component.onCompleted: {
         if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && sendWalletCombo.currentIndex < 0)
             sendWalletCombo.currentIndex = 0
-        if (selectedWallet !== "")
-            loadAddressBalances()
-        refreshFromBalance()
+        Qt.callLater(syncWalletFromCombo)
     }
 
-    ColumnLayout {
-        anchors.top: parent.top
-        anchors.topMargin: 24
-        anchors.leftMargin: 24
-        anchors.rightMargin: 24
-        anchors.horizontalCenter: parent.horizontalCenter
-        width: Math.min(720, parent ? parent.width - 48 : 720)
-        spacing: 20
+    onVisibleChanged: {
+        if (visible) {
+            if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && sendWalletCombo.currentIndex < 0)
+                sendWalletCombo.currentIndex = 0
+            Qt.callLater(syncWalletFromCombo)
+        }
+    }
 
-        RowLayout {
-            spacing: 10
-            Layout.alignment: Qt.AlignLeft
-            Layout.maximumWidth: 720
-            Label { text: "Wallet:"; font.pixelSize: 14 }
-            ComboBox {
-                id: sendWalletCombo
-                Layout.preferredWidth: 220
-                Layout.preferredHeight: 36
-                model: walletManager ? walletManager.wallets : []
-                onActivated: {
-                    if (walletManager && walletManager.wallets && index >= 0 && index < walletManager.wallets.length) {
-                        selectedWallet = walletManager.wallets[index]
-                        loadAddressBalances()
-                    }
-                }
-                onCurrentIndexChanged: {
-                    if (currentIndex >= 0 && walletManager && walletManager.wallets && currentIndex < walletManager.wallets.length) {
-                        var w = walletManager.wallets[currentIndex]
-                        if (w !== selectedWallet) {
-                            selectedWallet = w
-                            loadAddressBalances()
-                        }
-                        refreshFromBalance()
-                    }
-                }
-                Component.onCompleted: {
-                    if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && currentIndex < 0)
-                        currentIndex = 0
-                }
-            }
-            Item { Layout.fillWidth: true }
+    QbxPageLayout {
+        anchors.fill: parent
+
+        QbxSectionTitle { text: "Send" }
+
+        StatusPanel {
+            message: settingsManager && settingsManager.qbitxCliPath === "" ? "Configure qbitx-cli in Settings" : ""
+            panelType: "warning"
         }
 
-        Text {
-            text: "Send"
-            font.pixelSize: 22
-            font.bold: true
-            Layout.maximumWidth: 720
+        StatusPanel {
+            message: selectedWallet !== "" && !isLoadingBalances && fundedFromAddresses.length === 0 && !fromBalanceError
+                    ? "No funded addresses found for this wallet."
+                    : ""
+            panelType: "warning"
         }
 
-        Rectangle {
+        StatusPanel {
+            message: fromBalanceError ? resultLog : ""
+            panelType: "error"
+        }
+
+        StatusPanel {
+            message: amountField.text.trim() !== "" ? amountErrorText() : ""
+            panelType: "error"
+        }
+
+        QbxCard {
             Layout.fillWidth: true
-            Layout.maximumWidth: 720
-            height: 50
-            color: "#fff3cd"
-            border.color: "#ffc107"
-            border.width: 1
-            visible: settingsManager ? (settingsManager.qbitxCliPath === "") : false
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 10
-                Text {
-                    Layout.fillWidth: true
-                    text: "Configure qbitx-cli in Settings"
-                    color: "#856404"
-                    font.pixelSize: 14
-                }
-            }
-        }
-
-        GroupBox {
-            Layout.fillWidth: true
-            Layout.maximumWidth: 720
-            title: "Send Transaction"
+            title: "Transaction"
 
             ColumnLayout {
-                anchors.fill: parent
-                spacing: 12
+                Layout.fillWidth: true
+                spacing: 14
 
-                Label { text: "From Address"; font.pixelSize: 14 }
-                ComboBox {
-                    id: fromAddressCombo
+                RowLayout {
                     Layout.fillWidth: true
-                    editable: true
-                    model: addressBalances
-                    textRole: "address"
-                    font.pixelSize: 13
-                    onCurrentTextChanged: refreshFromBalance()
-                    onEditTextChanged: refreshFromBalance()
+                    spacing: 10
+                    Layout.preferredHeight: QbxTheme.formRowHeight
+                    Label {
+                        text: "Wallet"
+                        color: QbxTheme.textSecondary
+                        font.pixelSize: 13
+                        Layout.preferredWidth: QbxTheme.labelColumnWidth
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                    QbxComboBox {
+                        id: sendWalletCombo
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: 360
+                        Layout.preferredHeight: QbxTheme.formRowHeight
+                        model: walletManager ? walletManager.wallets : []
+                        onActivated: {
+                            if (walletManager && walletManager.wallets && index >= 0 && index < walletManager.wallets.length) {
+                                var w = walletManager.wallets[index]
+                                if (w !== selectedWallet) {
+                                    selectedWallet = w
+                                    loadAddressBalances()
+                                }
+                            }
+                        }
+                        onCurrentIndexChanged: syncWalletFromCombo()
+                        Component.onCompleted: {
+                            if (walletManager && walletManager.wallets && walletManager.wallets.length > 0 && currentIndex < 0)
+                                currentIndex = 0
+                        }
+                    }
                 }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    Layout.preferredHeight: QbxTheme.formRowHeight
+                    Label {
+                        text: "From address"
+                        color: QbxTheme.textSecondary
+                        font.pixelSize: 13
+                        Layout.preferredWidth: QbxTheme.labelColumnWidth
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                    QbxComboBox {
+                        id: fromAddressCombo
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: 640
+                        Layout.preferredHeight: QbxTheme.formRowHeight
+                        enabled: fundedFromAddresses.length > 0 && !isLoadingBalances
+                        model: fundedFromAddresses
+                        textRole: "label"
+                        onCurrentIndexChanged: updateFromBalanceText()
+                    }
+                    BusyIndicator {
+                        visible: isLoadingBalances
+                        running: isLoadingBalances
+                        Layout.preferredWidth: 24
+                        Layout.preferredHeight: 24
+                    }
+                }
+
                 Text {
                     Layout.fillWidth: true
+                    Layout.leftMargin: QbxTheme.labelColumnWidth + 10
                     text: fromBalanceText
                     font.pixelSize: 12
-                    color: fromBalanceError ? "#c00" : "#444"
+                    color: fromBalanceError ? QbxTheme.error : QbxTheme.textMuted
                     wrapMode: Text.WordWrap
                 }
 
-                Label { text: "To Address"; font.pixelSize: 14 }
-                TextField {
-                    id: toAddressField
+                RowLayout {
                     Layout.fillWidth: true
-                    placeholderText: "Destination address"
-                    font.pixelSize: 13
-                }
-
-                Label { text: "Amount (QBX)"; font.pixelSize: 14 }
-                TextField {
-                    id: amountField
-                    Layout.fillWidth: true
-                    placeholderText: "0.0"
-                    font.pixelSize: 13
-                    validator: DoubleValidator { bottom: 0 }
-                    inputMethodHints: Qt.ImhFormattedNumbersOnly
-                }
-
-                Label { text: "Fee mode"; font.pixelSize: 14 }
-                ComboBox {
-                    id: feeModeCombo
-                    Layout.fillWidth: true
-                    model: ["Low", "Normal", "High"]
-                    currentIndex: 1
-                    font.pixelSize: 13
-                }
-
-                Button {
-                    text: "Send"
-                    Layout.preferredHeight: 44
-                    font.pixelSize: 16
-                    font.weight: Font.DemiBold
-                    enabled: !isLoading && !walletBusy && selectedWallet !== "" && getFromAddress() !== "" && (toAddressField.text && toAddressField.text.trim() !== "") && isAmountValid()
-                    onClicked: sendTransaction()
-                    background: Rectangle {
-                        radius: 8
-                        border.width: 1
-                        border.color: parent.pressed ? "#a0a0a0" : (parent.hovered ? "#999" : "#888")
-                        color: parent.enabled ? (parent.pressed ? "#d0d0d0" : (parent.hovered ? "#d5d5d5" : "#c5c5c5")) : "#e8e8e8"
+                    spacing: 10
+                    Layout.preferredHeight: QbxTheme.formRowHeight
+                    Label {
+                        text: "To address"
+                        color: QbxTheme.textSecondary
+                        font.pixelSize: 13
+                        Layout.preferredWidth: QbxTheme.labelColumnWidth
+                        Layout.alignment: Qt.AlignVCenter
                     }
-                    contentItem: Text {
-                        text: parent.text
-                        color: parent.enabled ? "#2d2d2d" : "#888"
-                        font: parent.font
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
+                    QbxTextField {
+                        id: toAddressField
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: 640
+                        Layout.preferredHeight: QbxTheme.formRowHeight
+                        placeholderText: "Destination PQ address"
                     }
                 }
 
-                BusyIndicator {
-                    Layout.alignment: Qt.AlignCenter
-                    running: isLoading
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    Layout.preferredHeight: QbxTheme.formRowHeight
+                    Label {
+                        text: "Amount (QBX)"
+                        color: QbxTheme.textSecondary
+                        font.pixelSize: 13
+                        Layout.preferredWidth: QbxTheme.labelColumnWidth
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                    QbxTextField {
+                        id: amountField
+                        Layout.preferredWidth: 220
+                        Layout.maximumWidth: 220
+                        Layout.preferredHeight: QbxTheme.formRowHeight
+                        placeholderText: "0.001"
+                        validator: RegularExpressionValidator {
+                            regularExpression: /^\d*[.,]?\d{0,8}$/
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    Layout.preferredHeight: QbxTheme.formRowHeight
+                    Label {
+                        text: "Fee mode"
+                        color: QbxTheme.textSecondary
+                        font.pixelSize: 13
+                        Layout.preferredWidth: QbxTheme.labelColumnWidth
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                    QbxComboBox {
+                        id: feeModeCombo
+                        Layout.preferredWidth: 180
+                        Layout.maximumWidth: 180
+                        Layout.preferredHeight: QbxTheme.formRowHeight
+                        model: ["Low", "Normal", "High"]
+                        currentIndex: 1
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 8
+                    spacing: 10
+                    Item { Layout.preferredWidth: QbxTheme.labelColumnWidth }
+                    QbxButton {
+                        text: isSending ? "Sending…" : "Send"
+                        primary: true
+                        enabled: !isSending && !isLoadingBalances && !walletBusy
+                                 && selectedWallet !== ""
+                                 && getFromAddress() !== ""
+                                 && fundedFromAddresses.length > 0
+                                 && (toAddressField.text && toAddressField.text.trim() !== "")
+                                 && isValidAmount()
+                        onClicked: sendTransaction()
+                    }
+                    BusyIndicator {
+                        running: isSending
+                        visible: isSending
+                        Layout.preferredWidth: 28
+                        Layout.preferredHeight: 28
+                    }
                 }
             }
         }
 
-        GroupBox {
+        QbxCard {
             Layout.fillWidth: true
-            Layout.maximumWidth: 720
-            Layout.preferredHeight: 160
+            compact: true
             title: "Result"
 
-            Item {
-                width: parent.width
-                height: 160
-
-                TextArea {
-                    id: resultArea
-                    anchors.fill: parent
-                    readOnly: true
-                    text: resultLog
-                    wrapMode: TextArea.WrapAnywhere
+            TextArea {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 120
+                readOnly: true
+                text: resultLog
+                wrapMode: TextArea.WrapAnywhere
+                color: resultLog.indexOf("ERROR") === 0 ? QbxTheme.error : QbxTheme.textPrimary
+                font.pixelSize: 12
+                font.family: "Consolas,Courier New,monospace"
+                background: Rectangle {
+                    color: QbxTheme.bgInput
+                    radius: QbxTheme.radiusSmall
+                    border.color: QbxTheme.border
                 }
-
-                Text {
-                    anchors.left: resultArea.left
-                    anchors.leftMargin: 10
-                    anchors.top: resultArea.top
-                    anchors.topMargin: 8
-                    text: "TXID / error will appear here..."
-                    opacity: 0.45
-                    visible: resultArea.text.length === 0
-                    z: 2
-                }
+                placeholderText: "TXID or error will appear here…"
+                placeholderTextColor: QbxTheme.textMuted
             }
         }
     }
-
 }

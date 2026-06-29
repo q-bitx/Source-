@@ -1,17 +1,37 @@
+# Build folders
 build/
-*.o
-*.a
-*.so
-*.dll
-*.exe
-CMakeCache.txt
+build-*/
+cmake-build-*/
 CMakeFiles/
-cmake_install.cmake
-*.pro.user
-*.qmlc
-*.jsc
-qrc_qml.cpp
-moc_*.cpp
-*.moc
-ui_*.h
-qrc_*.cpp
+CMakeCache.txt
+Makefile
+
+# Runtime wallet/node data
+wallet.dat
+wallets/
+blocks/
+chainstate/
+debug.log
+qbitx.conf
+peers.dat
+banlist.json
+mempool.dat
+*.bak
+*.backup
+wallet_backup*
+pqwallet*
+
+# IDE/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+build/
+build-test/
+build-win/
+dist/
+installer/dist/
+.ico_venv/
+*.Zone.Identifier

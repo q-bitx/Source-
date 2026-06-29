@@ -2,6 +2,7 @@
 #include "settingsmanager.h"
 #include "clibridge.h"
 #include "pathutil.h"
+#include "qbitxembedded.h"
 #include <QDir>
 #include <QFileInfo>
 #include <QFile>
@@ -17,6 +18,7 @@
 #include <QProcess>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QUrl>
 
 WalletManager::WalletManager(SettingsManager *settings, CliBridge *cliBridge, QObject *parent)
     : QObject(parent)
@@ -100,6 +102,8 @@ void WalletManager::onCliSuccess(const QVariant &result)
     if (method == "backupwallet") {
         setLastError(QString());
         QString path = result.value<QVariantMap>().value("backup_path").toString();
+        if (path.isEmpty())
+            path = m_lastBackupPath;
         QString name = m_pendingBackupWalletName;
         m_pendingBackupWalletName.clear();
         if (path.isEmpty())
@@ -178,7 +182,15 @@ void WalletManager::loadWallet(const QString &name)
     m_cliBridge->call("loadwallet", QStringList() << name.trimmed(), QString());
 }
 
-void WalletManager::backupWallet(const QString &walletName)
+QString WalletManager::suggestedBackupFileName(const QString &walletName) const
+{
+    QString name = walletName.trimmed();
+    if (name.isEmpty())
+        return QStringLiteral("qbitx-wallet-backup.dat");
+    return QStringLiteral("wallet-%1-backup.dat").arg(name);
+}
+
+void WalletManager::saveWalletBackup(const QString &destinationPath, const QString &walletName)
 {
     if (!m_cliBridge || !m_settings || m_settings->effectiveQbitxCliPath().isEmpty()) {
         setLastError("qbitx-cli not configured.");
@@ -189,16 +201,48 @@ void WalletManager::backupWallet(const QString &walletName)
         setLastError("Select a loaded wallet to backup.");
         return;
     }
-    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
-    QString relRoot = QString("backups/backup_%1").arg(timestamp);
-    QDir dir;
-    if (!dir.mkpath(relRoot)) {
-        setLastError(QString("Failed to create backup directory: %1").arg(relRoot));
+
+    QString dest = destinationPath.trimmed();
+    if (dest.startsWith(QStringLiteral("file:"), Qt::CaseInsensitive))
+        dest = QUrl(dest).toLocalFile();
+    if (dest.isEmpty()) {
+        setLastError("Backup destination path is empty.");
+        return;
     }
+    if (!dest.endsWith(QStringLiteral(".dat"), Qt::CaseInsensitive))
+        dest += QStringLiteral(".dat");
+
+    const QString nativePath = QDir::toNativeSeparators(dest);
+    QFileInfo destInfo(nativePath);
+    QDir destDir = destInfo.dir();
+    if (!destDir.exists()) {
+        if (!destDir.mkpath(QStringLiteral("."))) {
+            setLastError(QString("Cannot create backup folder: %1").arg(destDir.absolutePath()));
+            return;
+        }
+    }
+
     setWalletBusy(true);
-    m_pendingMethod = QString("backupwallet");
+    m_pendingMethod = QStringLiteral("backupwallet");
     m_pendingBackupWalletName = name;
-    m_cliBridge->call("backupwallet", QStringList() << relRoot, name);
+    m_lastBackupPath = nativePath;
+    m_cliBridge->call(QStringLiteral("backupwallet"), QStringList() << nativePath, name);
+}
+
+void WalletManager::backupWallet(const QString &walletName)
+{
+    QString backupDir = getDefaultBackupDirectory();
+    if (backupDir.isEmpty()) {
+        setLastError("Could not determine backup directory.");
+        return;
+    }
+    QDir dir(backupDir);
+    if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+        setLastError(QString("Cannot create backup directory: %1").arg(backupDir));
+        return;
+    }
+    const QString destPath = QDir::toNativeSeparators(backupDir + QDir::separator() + suggestedBackupFileName(walletName));
+    saveWalletBackup(destPath, walletName);
 }
 
 void WalletManager::restoreWallet(const QString &name, const QString &folderPath)
@@ -239,6 +283,105 @@ void WalletManager::restoreWalletFromFolder(const QString &folderPath)
         ++suffix;
     }
     restoreWallet(name, path);
+}
+
+QString WalletManager::deriveWalletNameFromBackupFile(const QString &filePath)
+{
+    const QString base = QFileInfo(filePath).completeBaseName();
+    if (base.isEmpty())
+        return QString();
+
+    static const QRegularExpression walletBackupRe(
+        QStringLiteral("^wallet-(.+)-backup$"), QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch walletMatch = walletBackupRe.match(base);
+    if (walletMatch.hasMatch())
+        return sanitizeWalletName(walletMatch.captured(1));
+
+    if (base.compare(QStringLiteral("qbitx-wallet-backup"), Qt::CaseInsensitive) == 0)
+        return sanitizeWalletName(QStringLiteral("restored"));
+
+    static const QRegularExpression datedRe(
+        QStringLiteral("^qbitx_wallet_(.+)_\\d{8}$"), QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch datedMatch = datedRe.match(base);
+    if (datedMatch.hasMatch())
+        return sanitizeWalletName(datedMatch.captured(1));
+
+    if (base.compare(QStringLiteral("wallet"), Qt::CaseInsensitive) == 0)
+        return sanitizeWalletName(QStringLiteral("restored"));
+
+    return sanitizeWalletName(base);
+}
+
+void WalletManager::restoreWalletFromBackupFile(const QString &backupFilePath)
+{
+    if (!m_cliBridge || !m_settings || m_settings->effectiveQbitxCliPath().isEmpty()) {
+        setLastError("qbitx-cli not configured.");
+        return;
+    }
+
+    QString path = backupFilePath.trimmed();
+    if (path.startsWith(QStringLiteral("file:"), Qt::CaseInsensitive))
+        path = QUrl(path).toLocalFile();
+    path = QDir::toNativeSeparators(path);
+
+    if (path.isEmpty()) {
+        setLastError("No backup file selected.");
+        return;
+    }
+
+    QFileInfo info(path);
+    if (!info.exists()) {
+        setLastError(QString("Backup not found: %1").arg(path));
+        return;
+    }
+
+    if (info.isDir()) {
+        restoreWalletFromFolder(path);
+        return;
+    }
+
+    QString folderPath;
+    if (info.fileName().compare(QStringLiteral("wallet.dat"), Qt::CaseInsensitive) == 0) {
+        folderPath = info.absolutePath();
+    } else {
+        const QString datadir = m_settings->datadir();
+        if (datadir.isEmpty()) {
+            setLastError("Data directory not configured.");
+            return;
+        }
+        const QString stagingRoot = datadir + QStringLiteral("/.gui_restore_staging");
+        QDir dir;
+        if (!dir.mkpath(stagingRoot)) {
+            setLastError(QString("Cannot create restore staging folder: %1").arg(stagingRoot));
+            return;
+        }
+        const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+        folderPath = stagingRoot + QStringLiteral("/restore_") + stamp;
+        if (!dir.mkpath(folderPath)) {
+            setLastError(QString("Cannot create restore folder: %1").arg(folderPath));
+            return;
+        }
+        const QString destDat = folderPath + QStringLiteral("/wallet.dat");
+        if (QFile::exists(destDat) && !QFile::remove(destDat)) {
+            setLastError(QString("Cannot replace existing staging file: %1").arg(destDat));
+            return;
+        }
+        if (!QFile::copy(info.absoluteFilePath(), destDat)) {
+            setLastError(QString("Failed to copy backup file to: %1").arg(destDat));
+            return;
+        }
+    }
+
+    QString baseName = deriveWalletNameFromBackupFile(info.absoluteFilePath());
+    if (baseName.isEmpty())
+        baseName = QStringLiteral("restored");
+    QString name = baseName;
+    int suffix = 1;
+    while (m_loadedWallets.contains(name)) {
+        name = baseName + QStringLiteral("_") + QString::number(suffix);
+        ++suffix;
+    }
+    restoreWallet(name, folderPath);
 }
 
 void WalletManager::setWalletBusy(bool busy)
@@ -1341,11 +1484,7 @@ QVariantMap WalletManager::backupWalletToDefaultDirectory(const QString &walletN
     }
     
     // Use datadir for backup root: <datadir>/backups
-    QString datadir = m_settings->datadir();
-    if (datadir.isEmpty()) {
-        result["error"] = "Data directory not configured";
-        return result;
-    }
+    QString datadir = QBitXEmbedded::effectiveDatadir(m_settings);
     
     QString backupRoot = datadir + "/backups";
     QDir dir;
@@ -1377,28 +1516,15 @@ QVariantMap WalletManager::backupWalletToDefaultDirectory(const QString &walletN
     // Execute: qbitx-cli -datadir=<datadir> -rpcwallet=<walletName> backupwallet <full_path>/wallet.dat
     QProcess process;
     QStringList arguments;
-    
-    // Add datadir
-    arguments << "-datadir=" + datadir;
-    
-    // Add network flag if specified
+    QBitXEmbedded::appendConnectionCliArgs(m_settings, &arguments);
+
     QString network = m_settings->network();
     if (!network.isEmpty() && network != "main") {
         arguments << "-" + network;
     }
-    
-    // Add RPC credentials ONLY if BOTH are set
-    QString rpcuser = m_settings->rpcuser();
-    QString rpcpassword = m_settings->rpcpassword();
-    if (!rpcuser.isEmpty() && !rpcpassword.isEmpty()) {
-        arguments << "-rpcuser=" + rpcuser;
-        arguments << "-rpcpassword=" + rpcpassword;
-    }
-    
-    // Add -rpcwallet
+
     arguments << "-rpcwallet=" + walletName;
-    
-    // Add backupwallet method and destination parameter
+
     arguments << "backupwallet" << walletDatDestPath;
     
     process.start(qbitxCliPath, arguments);

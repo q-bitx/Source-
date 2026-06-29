@@ -1,4 +1,4 @@
-#include <QGuiApplication>
+#include <QApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QIcon>
@@ -19,8 +19,18 @@
 #include "walletmanager.h"
 #include "clirunner.h"
 #include "logmanager.h"
+#include "nodemanager.h"
+#include "rpcwalletbootstrap.h"
+#include "traymanager.h"
+#include "appinstance.h"
 
-// Non-consuming global input logger: always return false. ON by default until we confirm events reach the app.
+static bool debugInputEnabled()
+{
+    const QByteArray v = qgetenv("QBITX_GUI_DEBUG_INPUT");
+    return !v.isEmpty() && v != "0";
+}
+
+// Non-consuming global input logger: enabled only when QBITX_GUI_DEBUG_INPUT is set.
 class InputSpy : public QObject
 {
 public:
@@ -162,13 +172,25 @@ int main(int argc, char *argv[])
         qputenv("QT_QUICK_BACKEND", "software");
     }
 
-    QGuiApplication app(argc, argv);
+    QApplication app(argc, argv);
     app.setApplicationName("qbitx-gui");
     app.setOrganizationName("qbitx");
+    app.setApplicationDisplayName(QStringLiteral("Q-BitX Wallet"));
+    {
+        QIcon appIcon(QStringLiteral(":/QBitX/assets/qbitx_wallet_icon.ico"));
+        if (!appIcon.isNull())
+            app.setWindowIcon(appIcon);
+    }
+    QApplication::setQuitOnLastWindowClosed(false);
 
-    // Non-consuming input spy: always on until we confirm events reach the app.
-    InputSpy *inputSpy = new InputSpy(&app);
-    app.installEventFilter(inputSpy);
+    AppInstance appInstance;
+    if (appInstance.tryActivateExistingInstance())
+        return 0;
+
+    if (debugInputEnabled()) {
+        InputSpy *inputSpy = new InputSpy(&app);
+        app.installEventFilter(inputSpy);
+    }
 
 #ifdef ENABLE_EVENT_FILTER_LOGGING
     // Extra diagnosis when explicitly enabled. Never consumes events.
@@ -180,16 +202,34 @@ int main(int argc, char *argv[])
     });
 #endif
 
+#ifdef ENABLE_EVENT_FILTER_LOGGING
     QObject::connect(&app, &QGuiApplication::applicationStateChanged, &app, [](Qt::ApplicationState state) {
         const char *s = (state == Qt::ApplicationActive) ? "Active" : (state == Qt::ApplicationInactive) ? "Inactive" : (state == Qt::ApplicationSuspended) ? "Suspended" : "Hidden";
         qInfo("[INPUT] applicationStateChanged: %s", s);
     });
+#endif
 
     QDir::setCurrent(QCoreApplication::applicationDirPath());
 
     LogManager *logManager = new LogManager(&app);
     LogManager::setInstance(logManager);
     qInstallMessageHandler(logMessageHandler);
+    SettingsManager *settingsManager = new SettingsManager(&app);
+
+    NodeManager *nodeManager = new NodeManager(&app);
+    QObject::connect(nodeManager, &NodeManager::gracefulShutdownFinished, &app, [logManager]() {
+        if (logManager)
+            logManager->flushAll();
+        QCoreApplication::quit();
+    });
+    QObject::connect(&app, &QGuiApplication::aboutToQuit, logManager, &LogManager::flushAll);
+
+    TrayManager *trayManager = new TrayManager(&app);
+    if (!nodeManager->startNode()) {
+        qWarning() << "Embedded QBitX node did not start; CLI features may fail until qbitx is available.";
+    }
+
+    settingsManager->setDatadir(nodeManager->dataDir());
 
     qmlRegisterType<SettingsManager>("QBitX", 1, 0, "SettingsManager");
     qmlRegisterType<CliBridge>("QBitX", 1, 0, "CliBridge");
@@ -197,10 +237,9 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
 
-    SettingsManager* settingsManager = new SettingsManager(&app);
-    CliBridge* cliBridge = new CliBridge(settingsManager, &app);
-    WalletManager* walletManager = new WalletManager(settingsManager, cliBridge, &app);
-    CliRunner* cliRunner = new CliRunner(&app);
+    CliBridge *cliBridge = new CliBridge(settingsManager, &app);
+    WalletManager *walletManager = new WalletManager(settingsManager, cliBridge, &app);
+    CliRunner *cliRunner = new CliRunner(&app);
 
     cliBridge->setLogManager(logManager);
     cliRunner->setLogManager(logManager);
@@ -208,37 +247,51 @@ int main(int argc, char *argv[])
     if (settingsManager->useAutoDetectCli())
         settingsManager->autoDetectCliPath();
 
+    auto *rpcBootstrap = new RpcWalletBootstrap(settingsManager, logManager, &app);
+    QObject::connect(rpcBootstrap, &RpcWalletBootstrap::walletLoadPhaseCompleted, walletManager,
+                     &WalletManager::refreshWallets);
+    QObject::connect(rpcBootstrap, &RpcWalletBootstrap::rpcReadinessTimedOut, &app,
+                     [](const QString &msg) { qWarning() << "RpcWalletBootstrap:" << msg; });
+    if (nodeManager->isRunning())
+        rpcBootstrap->begin();
+
     // Context objects must outlive the engine: parent to app so they are never deleted during refresh/navigation.
     engine.rootContext()->setContextProperty("settingsManager", settingsManager);
     engine.rootContext()->setContextProperty("cliBridge", cliBridge);
     engine.rootContext()->setContextProperty("walletManager", walletManager);
     engine.rootContext()->setContextProperty("cliRunner", cliRunner);
     engine.rootContext()->setContextProperty("logManager", logManager);
-    
-    const QUrl url(QStringLiteral("qrc:/QBitX/main.qml"));
+    engine.rootContext()->setContextProperty("rpcBootstrap", rpcBootstrap);
+    engine.rootContext()->setContextProperty("nodeManager", nodeManager);
+    engine.rootContext()->setContextProperty("trayManager", trayManager);
+
+    const QUrl url(QStringLiteral("qrc:/QBitX/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
                      &app, [url](QObject *obj, const QUrl &objUrl) {
         if (!obj && url == objUrl)
             QCoreApplication::exit(-1);
     }, Qt::QueuedConnection);
-    
-    engine.load(QUrl(QStringLiteral("qrc:/QBitX/qml/main.qml")));
 
-    // Log root window state and force it to take focus so clicks work (fix for WSL/xcb/xwayland).
-    if (!engine.rootObjects().isEmpty()) {
-        QObject *root = engine.rootObjects().first();
-        QWindow *win = qobject_cast<QWindow *>(root);
-        if (win) {
-            qInfo("[INPUT] root window: isVisible=%d isActive=%d isExposed=%d flags=0x%x",
-                  win->isVisible(), win->isActive(), win->isExposed(), (unsigned int)win->flags());
-            win->raise();
-            win->requestActivate();
-            QTimer::singleShot(100, &app, [win]() { win->requestActivate(); });
-        } else {
-            qInfo("[INPUT] root object is not a QWindow: %s", root ? root->metaObject()->className() : "null");
-        }
-    } else {
-        qInfo("[INPUT] no root objects after load");
+    engine.load(url);
+
+    if (engine.rootObjects().isEmpty()) {
+        qCritical() << "QML root window was not created";
+        if (nodeManager && nodeManager->isRunning())
+            nodeManager->requestGracefulShutdown();
+        if (logManager)
+            logManager->flushAll();
+        return -1;
+    }
+
+    // Force root window to take focus so clicks work (fix for WSL/xcb/xwayland).
+    QObject *root = engine.rootObjects().first();
+    QWindow *win = qobject_cast<QWindow *>(root);
+    if (win) {
+        trayManager->setMainWindow(win);
+        appInstance.setMainWindow(win);
+        win->raise();
+        win->requestActivate();
+        QTimer::singleShot(100, &app, [win]() { win->requestActivate(); });
     }
 
     return app.exec();

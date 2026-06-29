@@ -1,6 +1,10 @@
 <RCC>
     <qresource prefix="/QBitX">
+        <file alias="assets/qbitx_wallet_icon.ico">assets/qbitx_wallet_icon.ico</file>
+        <file alias="assets/sidebar_logo.png">assets/sidebar_logo.png</file>
         <file>qml/main.qml</file>
+        <file>qml/theme/QbxTheme.qml</file>
+        <file>qml/theme/qmldir</file>
         <file>qml/pages/Dashboard.qml</file>
         <file>qml/pages/Wallets.qml</file>
         <file>qml/pages/Addresses.qml</file>
@@ -11,6 +15,13 @@
         <file>qml/pages/qmldir</file>
         <file>qml/components/SidebarButton.qml</file>
         <file>qml/components/StatusPanel.qml</file>
+        <file>qml/components/QbxButton.qml</file>
+        <file>qml/components/QbxCard.qml</file>
+        <file>qml/components/QbxInfoRow.qml</file>
+        <file>qml/components/QbxPageLayout.qml</file>
+        <file>qml/components/QbxSectionTitle.qml</file>
+        <file>qml/components/QbxTextField.qml</file>
+        <file>qml/components/QbxComboBox.qml</file>
         <file>qml/components/qmldir</file>
     </qresource>
 </RCC>

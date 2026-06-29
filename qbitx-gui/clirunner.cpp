@@ -1,9 +1,9 @@
 #include "clirunner.h"
 #include "logmanager.h"
-#include <QCoreApplication>
+#include "qbitxembedded.h"
+#include "clipathutil.h"
 #include <QDir>
 #include <QFileInfo>
-#include <QStandardPaths>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTimer>
@@ -19,39 +19,7 @@ CliRunner::CliRunner(QObject *parent)
 
 QString CliRunner::detectCliPath()
 {
-    QString appDir = QCoreApplication::applicationDirPath();
-
-    // 1) Next to GUI executable
-    QString pathExe = appDir + "/qbitx-cli";
-    QFileInfo infoExe(pathExe);
-    if (infoExe.exists() && infoExe.isExecutable())
-        return infoExe.absoluteFilePath();
-
-    // 2) ~/qbitx_restore/build_wallet2/qbitx-cli
-    QString home = QDir::homePath();
-    QString pathBw2 = home + "/qbitx_restore/build_wallet2/qbitx-cli";
-    QFileInfo infoBw2(pathBw2);
-    if (infoBw2.exists() && infoBw2.isExecutable())
-        return infoBw2.absoluteFilePath();
-
-    // 3) ~/qbitx_restore/build_wallet/qbitx-cli
-    QString pathBw = home + "/qbitx_restore/build_wallet/qbitx-cli";
-    QFileInfo infoBw(pathBw);
-    if (infoBw.exists() && infoBw.isExecutable())
-        return infoBw.absoluteFilePath();
-
-    // 4) ./qbitx-cli (working dir)
-    QString pathCwd = QDir::currentPath() + "/qbitx-cli";
-    QFileInfo infoCwd(pathCwd);
-    if (infoCwd.exists() && infoCwd.isExecutable())
-        return infoCwd.absoluteFilePath();
-
-    // 5) PATH lookup
-    QString foundPath = QStandardPaths::findExecutable("qbitx-cli");
-    if (!foundPath.isEmpty())
-        return foundPath;
-
-    return QString();
+    return discoverQbitxCliExecutable();
 }
 
 void CliRunner::setLastStdout(const QString &s)
@@ -116,11 +84,10 @@ void CliRunner::testConnection(const QString &cliPath, const QString &datadir)
     }
 
     QStringList args;
-    if (!datadir.trimmed().isEmpty())
-        args << "-datadir=" + datadir.trimmed();
-    args << "getnetworkinfo";
+    QBitXEmbedded::appendConnectionCliArgsForDatadir(datadir.trimmed(), &args);
+    args << QStringLiteral("getnetworkinfo");
 
-    QString fullCmd = path + " " + args.join(" ");
+    QString fullCmd = path + " " + QBitXEmbedded::redactCliCommandForLog(QStringList{path} + args).join(QLatin1Char(' '));
     if (m_logManager)
         m_logManager->append("INFO", "CMD: " + fullCmd);
 

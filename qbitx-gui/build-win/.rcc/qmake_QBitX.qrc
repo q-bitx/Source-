@@ -1,6 +1,0 @@
-<RCC>
-  <qresource prefix="/QBitX">
-    <file alias="qmldir">/home/sus/qbitx_restore/qbitx-gui/build-win/QBitX/qmldir</file>
-  </qresource>
-</RCC>
-

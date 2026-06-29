@@ -21,7 +21,7 @@ public:
 
     QString qbitxCliPath() const { return m_qbitxCliPath; }
     void setQbitxCliPath(const QString &path);
-    /** Effective path: QBITX_CLI_PATH env, else stored path, else default build_wallet2 path; relative resolved against app dir. */
+    /** Effective path: QBITX_CLI_PATH env, else stored path, else shared discovery (see clipathutil). */
     Q_INVOKABLE QString effectiveQbitxCliPath() const;
     /** Returns true if effective path exists and is executable; if error is non-null, sets it. Also updates lastCliCheckError. QML calls with no args and reads lastCliCheckError. */
     Q_INVOKABLE bool checkCliAvailable(QString *error = nullptr);

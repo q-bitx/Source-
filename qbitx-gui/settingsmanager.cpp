@@ -1,5 +1,5 @@
 #include "settingsmanager.h"
-#include <QStandardPaths>
+#include "clipathutil.h"
 #include <QDir>
 #include <QFileInfo>
 #include <QCoreApplication>
@@ -101,7 +101,7 @@ QString SettingsManager::effectiveQbitxCliPath() const
     if (path.isEmpty())
         path = m_qbitxCliPath;
     if (path.isEmpty())
-        path = QDir::homePath() + "/qbitx_restore/build_wallet2/qbitx-cli";
+        path = discoverQbitxCliExecutable();
     if (QDir::isRelativePath(path))
         path = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(path);
     return QDir::cleanPath(path);
@@ -138,48 +138,8 @@ bool SettingsManager::checkCliAvailable(QString *error)
 
 void SettingsManager::autoDetectCliPath()
 {
-    QString appDir = QCoreApplication::applicationDirPath();
-    QString home = QDir::homePath();
-
-    // 1) Next to GUI executable
-    QString path1 = appDir + "/qbitx-cli";
-    QFileInfo info1(path1);
-    if (info1.exists() && info1.isExecutable()) {
-        setQbitxCliPath(info1.absoluteFilePath());
-        return;
-    }
-
-    // 2) ~/qbitx_restore/build_wallet2/qbitx-cli
-    QString pathBw2 = home + "/qbitx_restore/build_wallet2/qbitx-cli";
-    QFileInfo infoBw2(pathBw2);
-    if (infoBw2.exists() && infoBw2.isExecutable()) {
-        setQbitxCliPath(infoBw2.absoluteFilePath());
-        return;
-    }
-
-    // 3) ~/qbitx_restore/build_wallet/qbitx-cli
-    QString pathBw = home + "/qbitx_restore/build_wallet/qbitx-cli";
-    QFileInfo infoBw(pathBw);
-    if (infoBw.exists() && infoBw.isExecutable()) {
-        setQbitxCliPath(infoBw.absoluteFilePath());
-        return;
-    }
-
-    // 4) ./qbitx-cli (working dir)
-    QString pathCwd = QDir::currentPath() + "/qbitx-cli";
-    QFileInfo infoCwd(pathCwd);
-    if (infoCwd.exists() && infoCwd.isExecutable()) {
-        setQbitxCliPath(infoCwd.absoluteFilePath());
-        return;
-    }
-
-    // 5) PATH lookup
-    QString foundPath = QStandardPaths::findExecutable("qbitx-cli");
-    if (!foundPath.isEmpty()) {
-        setQbitxCliPath(foundPath);
-        return;
-    }
-
-    // Not found - leave path empty
+    const QString found = discoverQbitxCliExecutable();
+    if (!found.isEmpty())
+        setQbitxCliPath(found);
 }
 

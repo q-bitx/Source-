@@ -32,8 +32,11 @@ public:
     Q_INVOKABLE void createWallet(const QString &name);
     Q_INVOKABLE void loadWallet(const QString &name);
     Q_INVOKABLE void backupWallet(const QString &walletName);
+    Q_INVOKABLE void saveWalletBackup(const QString &destinationPath, const QString &walletName);
+    Q_INVOKABLE QString suggestedBackupFileName(const QString &walletName) const;
     Q_INVOKABLE void restoreWallet(const QString &name, const QString &folderPath);
     Q_INVOKABLE void restoreWalletFromFolder(const QString &folderPath);
+    Q_INVOKABLE void restoreWalletFromBackupFile(const QString &backupFilePath);
 
     Q_INVOKABLE void importWalletFromPath(const QString &sourcePath, const QString &walletName = QString());
     Q_INVOKABLE QVariantMap backupWalletToPath(const QString &backupDir, const QString &walletName);
@@ -94,6 +97,7 @@ private:
     QString deriveWalletNameFromFolderInternal(const QString &folderPath);
     QString uniqueWalletDirName(const QString &datadir, const QString &desiredName);
     QString sanitizeWalletName(const QString &name);
+    QString deriveWalletNameFromBackupFile(const QString &filePath);
     
     // Backup methods
     QVariantMap backupWalletToDefaultDirectory(const QString &walletName);

@@ -2,9 +2,11 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import "../components" 1.0
+import "../theme" 1.0
 
 Page {
     id: dashboardPage
+    background: Rectangle { color: "transparent" }
 
     property var blockchainInfo: ({})
     property var networkInfo: ({})
@@ -16,6 +18,8 @@ Page {
 
     function refresh() {
         if (walletBusy)
+            return
+        if (!rpcBootstrap || !rpcBootstrap.rpcReady)
             return
         cliAvailable = settingsManager.checkCliAvailable()
         if (!cliAvailable) {
@@ -29,25 +33,41 @@ Page {
         cliBridge.call("getnetworkinfo")
     }
 
+    function syncStatusText() {
+        if (!cliAvailable) return "Configure settings"
+        if (!hasBlockchainInfo) return "—"
+        if (blockchainInfo.initialblockdownload === false) return "Synced"
+        var blocks = blockchainInfo.blocks
+        var headers = blockchainInfo.headers
+        if (blocks === undefined || headers === undefined || headers <= 0) return "Syncing…"
+        var pct = Math.min(100, Math.max(0, (blocks / headers) * 100))
+        return "Syncing " + pct.toFixed(1) + "%"
+    }
+
     Timer {
         id: refreshTimer
         interval: 5000
-        running: visible && !walletBusy
+        running: visible && !walletBusy && rpcBootstrap && rpcBootstrap.rpcReady
         repeat: true
         onTriggered: refresh()
     }
 
     Connections {
+        target: rpcBootstrap
+        function onRpcReadyChanged() {
+            if (rpcBootstrap && rpcBootstrap.rpcReady)
+                refresh()
+        }
+    }
+
+    Connections {
         target: cliBridge
         function onSuccess(result) {
-            // Try to determine which call succeeded based on result structure
             if (result.chain !== undefined || result.blockchain !== undefined || result.blocks !== undefined) {
-                // This is blockchaininfo
                 blockchainInfo = result
                 hasBlockchainInfo = true
                 lastError = ""
             } else if (result.version !== undefined || result.subversion !== undefined) {
-                // This is networkinfo
                 networkInfo = result
                 hasNetworkInfo = true
                 lastError = ""
@@ -57,165 +77,127 @@ Page {
             lastError = errorMessage
             if (logManager)
                 logManager.append("ERROR", "Dashboard RPC: " + errorMessage)
-            // Keep last known values; do not overwrite blockchainInfo/networkInfo
         }
     }
 
     Component.onCompleted: {
-        refreshTimer.start()
-        refresh()
+        if (rpcBootstrap && rpcBootstrap.rpcReady)
+            refresh()
     }
 
-    ScrollView {
+    QbxPageLayout {
         anchors.fill: parent
-        anchors.topMargin: 24
-        anchors.leftMargin: 24
-        anchors.rightMargin: 24
-        anchors.bottomMargin: 24
 
-        ColumnLayout {
-            width: dashboardPage.width - 48
-            spacing: 24
-            Layout.alignment: Qt.AlignHCenter
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 12
 
-            RowLayout {
-                Layout.alignment: Qt.AlignHCenter
-                spacing: 12
+            QbxSectionTitle { text: "Dashboard" }
+
+            Item { Layout.fillWidth: true }
+
+            Rectangle {
+                visible: lastError !== ""
+                height: 26
+                width: disconnectedLabel.implicitWidth + 20
+                radius: QbxTheme.radiusSmall
+                color: Qt.rgba(QbxTheme.error.r, QbxTheme.error.g, QbxTheme.error.b, 0.15)
+                border.color: QbxTheme.error
+                border.width: 1
+
                 Text {
-                    text: "Dashboard"
-                    font.pixelSize: 22
-                    font.bold: true
-                }
-                Rectangle {
-                    visible: lastError !== ""
-                    Layout.preferredHeight: 26
-                    Layout.preferredWidth: 110
-                    radius: 4
-                    color: "#f8d7da"
-                    border.color: "#dc3545"
-                    border.width: 1
-                    Text {
-                        anchors.centerIn: parent
-                        text: "Disconnected"
-                        font.pixelSize: 12
-                        color: "#721c24"
-                    }
+                    id: disconnectedLabel
+                    anchors.centerIn: parent
+                    text: "Disconnected"
+                    font.pixelSize: 11
+                    font.weight: Font.DemiBold
+                    color: QbxTheme.error
                 }
             }
+        }
 
-            StatusPanel {
-                message: !cliAvailable ? "Configure qbitx-cli in Settings or set QBITX_CLI_PATH" : ""
-                panelType: "warning"
-            }
+        StatusPanel {
+            message: !cliAvailable ? "Configure qbitx-cli in Settings or set QBITX_CLI_PATH" : ""
+            panelType: "warning"
+        }
 
-            StatusPanel {
-                message: lastError !== "" ? ("Error: " + lastError) : ""
-                panelType: "error"
-            }
+        StatusPanel {
+            message: lastError !== "" ? ("Error: " + lastError) : ""
+            panelType: "error"
+        }
 
-            GroupBox {
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 16
+            Layout.preferredHeight: QbxTheme.dashboardCardHeight
+
+            QbxCard {
+                id: blockchainCard
                 Layout.fillWidth: true
-                Layout.maximumWidth: 720
-                Layout.alignment: Qt.AlignHCenter
+                Layout.fillHeight: true
+                Layout.minimumWidth: 260
+                Layout.preferredWidth: 1
+                Layout.preferredHeight: QbxTheme.dashboardCardHeight
                 title: "Blockchain Info"
-                font.pixelSize: 22
-                font.bold: true
 
-                GridLayout {
-                    anchors.fill: parent
-                    columns: 2
-
-                    Text { text: "Chain:"; font.pixelSize: 16 }
-                    Text {
-                        text: hasBlockchainInfo && blockchainInfo.chain !== undefined
-                              ? blockchainInfo.chain
-                              : (!cliAvailable ? "Configure settings" : "—")
-                        font.pixelSize: 16
-                        font.weight: Font.DemiBold
-                    }
-
-                    Text { text: "Blocks:"; font.pixelSize: 16 }
-                    Text {
-                        text: hasBlockchainInfo && blockchainInfo.blocks !== undefined
-                              ? blockchainInfo.blocks
-                              : (!cliAvailable ? "Configure settings" : "—")
-                        font.pixelSize: 16
-                        font.weight: Font.DemiBold
-                    }
-
-                    Text { text: "Headers:"; font.pixelSize: 16 }
-                    Text {
-                        text: hasBlockchainInfo && blockchainInfo.headers !== undefined
-                              ? blockchainInfo.headers
-                              : (!cliAvailable ? "Configure settings" : "—")
-                        font.pixelSize: 16
-                        font.weight: Font.DemiBold
-                    }
-
-                    Text { text: "Verification Progress:"; font.pixelSize: 16 }
-                    Text {
-                        text: {
-                            if (!cliAvailable) return "Configure settings"
-                            if (!hasBlockchainInfo) return "—"
-                            if (blockchainInfo.initialblockdownload === false) return "Synced"
-                            var blocks = blockchainInfo.blocks
-                            var headers = blockchainInfo.headers
-                            if (blocks === undefined || headers === undefined || headers <= 0) return "—"
-                            var pct = Math.min(100, Math.max(0, (blocks / headers) * 100))
-                            return pct.toFixed(2) + "%"
-                        }
-                        font.pixelSize: 16
-                        font.weight: Font.DemiBold
-                    }
-
-                    Text { text: "Difficulty:"; font.pixelSize: 16 }
-                    Text {
-                        text: hasBlockchainInfo && blockchainInfo.difficulty !== undefined
-                              ? blockchainInfo.difficulty
-                              : (!cliAvailable ? "Configure settings" : "—")
-                        font.pixelSize: 16
-                        font.weight: Font.DemiBold
-                    }
+                QbxInfoRow {
+                    label: "Chain"
+                    value: hasBlockchainInfo && blockchainInfo.chain !== undefined
+                           ? blockchainInfo.chain
+                           : (!cliAvailable ? "Configure settings" : "—")
+                    highlight: true
+                }
+                QbxInfoRow {
+                    label: "Blocks"
+                    value: hasBlockchainInfo && blockchainInfo.blocks !== undefined
+                           ? String(blockchainInfo.blocks)
+                           : (!cliAvailable ? "Configure settings" : "—")
+                }
+                QbxInfoRow {
+                    label: "Headers"
+                    value: hasBlockchainInfo && blockchainInfo.headers !== undefined
+                           ? String(blockchainInfo.headers)
+                           : (!cliAvailable ? "Configure settings" : "—")
+                }
+                QbxInfoRow {
+                    label: "Sync status"
+                    value: syncStatusText()
+                    highlight: syncStatusText() === "Synced"
+                }
+                QbxInfoRow {
+                    label: "Difficulty"
+                    value: hasBlockchainInfo && blockchainInfo.difficulty !== undefined
+                           ? String(blockchainInfo.difficulty)
+                           : (!cliAvailable ? "Configure settings" : "—")
                 }
             }
 
-            GroupBox {
+            QbxCard {
+                id: networkCard
                 Layout.fillWidth: true
-                Layout.maximumWidth: 720
-                Layout.alignment: Qt.AlignHCenter
+                Layout.fillHeight: true
+                Layout.minimumWidth: 260
+                Layout.preferredWidth: 1
+                Layout.preferredHeight: QbxTheme.dashboardCardHeight
                 title: "Network Info"
-                font.pixelSize: 22
-                font.bold: true
 
-                GridLayout {
-                    anchors.fill: parent
-                    columns: 2
-
-                    Text { text: "Version:"; font.pixelSize: 16 }
-                    Text {
-                        text: hasNetworkInfo && networkInfo.version !== undefined
-                              ? networkInfo.version
-                              : (!cliAvailable ? "Configure settings" : "—")
-                        font.pixelSize: 16
-                        font.weight: Font.DemiBold
-                    }
-
-                    Text { text: "Connections:"; font.pixelSize: 16 }
-                    Text {
-                        text: hasNetworkInfo && networkInfo.connections !== undefined
-                              ? networkInfo.connections
-                              : (!cliAvailable ? "Configure settings" : "—")
-                        font.pixelSize: 16
-                        font.weight: Font.DemiBold
-                    }
-
-                    Text { text: "Network Active:"; font.pixelSize: 16 }
-                    Text {
-                        text: !cliAvailable ? "Configure settings"
-                              : (hasNetworkInfo ? (networkInfo.networkactive !== undefined ? (networkInfo.networkactive ? "Yes" : "No") : "—") : "—")
-                        font.pixelSize: 16
-                        font.weight: Font.DemiBold
-                    }
+                QbxInfoRow {
+                    label: "Version"
+                    value: hasNetworkInfo && networkInfo.version !== undefined
+                           ? String(networkInfo.version)
+                           : (!cliAvailable ? "Configure settings" : "—")
+                }
+                QbxInfoRow {
+                    label: "Connections"
+                    value: hasNetworkInfo && networkInfo.connections !== undefined
+                           ? String(networkInfo.connections)
+                           : (!cliAvailable ? "Configure settings" : "—")
+                    highlight: hasNetworkInfo && networkInfo.connections > 0
+                }
+                QbxInfoRow {
+                    label: "Network active"
+                    value: !cliAvailable ? "Configure settings"
+                          : (hasNetworkInfo ? (networkInfo.networkactive !== undefined ? (networkInfo.networkactive ? "Yes" : "No") : "—") : "—")
                 }
             }
         }

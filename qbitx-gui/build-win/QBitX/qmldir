@@ -1,4 +1,0 @@
-module QBitX
-typeinfo qbitx-gui.qmltypes
-prefer :/QBitX/
-

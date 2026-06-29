@@ -1,3 +1,10 @@
 module components
 SidebarButton 1.0 SidebarButton.qml
 StatusPanel 1.0 StatusPanel.qml
+QbxButton 1.0 QbxButton.qml
+QbxCard 1.0 QbxCard.qml
+QbxInfoRow 1.0 QbxInfoRow.qml
+QbxPageLayout 1.0 QbxPageLayout.qml
+QbxSectionTitle 1.0 QbxSectionTitle.qml
+QbxTextField 1.0 QbxTextField.qml
+QbxComboBox 1.0 QbxComboBox.qml

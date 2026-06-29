@@ -1,15 +1,34 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import "../components" 1.0
+import "../theme" 1.0
 
 Page {
     id: historyPage
+    background: Rectangle { color: "transparent" }
 
     property var transactions: []
     property bool isLoading: false
     property bool walletBusy: walletManager ? walletManager.walletBusy : false
     property bool hasWallet: walletManager && walletManager.wallets ? walletManager.wallets.length > 0 : false
     property string selectedWallet: ""
+
+    function transactionTimestamp(tx) {
+        if (!tx)
+            return 0
+        return tx.time || tx.blocktime || 0
+    }
+
+    function sortTransactionsNewestFirst(list) {
+        if (!Array.isArray(list))
+            return []
+        var sorted = list.slice()
+        sorted.sort(function(a, b) {
+            return transactionTimestamp(b) - transactionTimestamp(a)
+        })
+        return sorted
+    }
 
     function refreshHistory() {
         if (!settingsManager || settingsManager.qbitxCliPath === "")
@@ -31,18 +50,13 @@ Page {
         target: cliBridge
         function onSuccess(result) {
             isLoading = false
-            // MONOTONIC RULE: ANY result format = "loaded but empty wallet"
-            // Empty transaction list does NOT mean wallet is unloaded
             if (Array.isArray(result)) {
-                transactions = result  // Accept any array (including empty)
+                transactions = sortTransactionsNewestFirst(result)
             } else {
-                // Unknown format = empty history, NOT unloaded wallet
                 transactions = []
-                console.log("History: Non-array result treated as empty history:", typeof result)
             }
-            if (errorLabel) {
+            if (errorLabel)
                 errorLabel.text = ""
-            }
         }
         function onErrorOccurred(errorMessage) {
             isLoading = false
@@ -71,19 +85,28 @@ Page {
             refreshHistory()
     }
 
-    ColumnLayout {
+    QbxPageLayout {
         anchors.fill: parent
-        anchors.margins: 20
-        spacing: 20
+
+        RowLayout {
+            Layout.fillWidth: true
+            QbxSectionTitle { text: "Transaction History" }
+            Item { Layout.fillWidth: true }
+            QbxButton {
+                text: "Refresh"
+                compact: true
+                enabled: settingsManager && settingsManager.qbitxCliPath !== "" && selectedWallet !== "" && !walletBusy
+                onClicked: refreshHistory()
+            }
+        }
 
         RowLayout {
             Layout.fillWidth: true
             spacing: 10
-            Label { text: "Wallet:"; font.pixelSize: 14 }
-            ComboBox {
+            Label { text: "Wallet"; color: QbxTheme.textSecondary; font.pixelSize: 13 }
+            QbxComboBox {
                 id: historyWalletCombo
-                Layout.preferredWidth: 260
-                Layout.preferredHeight: 36
+                Layout.preferredWidth: 280
                 model: walletManager ? walletManager.wallets : []
                 onActivated: {
                     if (walletManager && walletManager.wallets && index >= 0 && index < walletManager.wallets.length) {
@@ -105,109 +128,104 @@ Page {
                         currentIndex = 0
                 }
             }
-            Item { Layout.fillWidth: true }
         }
 
-        Text {
-            text: "Transaction History"
-            font.pixelSize: 24
-            font.bold: true
+        StatusPanel {
+            message: settingsManager && settingsManager.qbitxCliPath === "" ? "Configure qbitx-cli in Settings" : ""
+            panelType: "warning"
         }
 
-        Rectangle {
-            Layout.fillWidth: true
-            height: 50
-            color: "#fff3cd"
-            border.color: "#ffc107"
-            border.width: 1
-            visible: settingsManager ? (settingsManager.qbitxCliPath === "") : false
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 10
-
-                Text {
-                    Layout.fillWidth: true
-                    text: "Configure qbitx-cli in Settings"
-                    color: "#856404"
-                    font.pixelSize: 14
-                }
-            }
+        StatusPanel {
+            message: errorLabel.text
+            panelType: "error"
         }
 
         RowLayout {
-            Layout.fillWidth: true
-
-            Button {
-                text: "Refresh"
-                enabled: settingsManager && settingsManager.qbitxCliPath !== "" && selectedWallet !== "" && !walletBusy
-                onClicked: refreshHistory()
-            }
+            visible: isLoading
+            spacing: 8
+            BusyIndicator { running: isLoading; Layout.preferredWidth: 24; Layout.preferredHeight: 24 }
+            Label { text: "Loading…"; color: QbxTheme.textMuted; font.pixelSize: 13 }
         }
 
-        Text {
-            id: errorLabel
-            color: "red"
-            visible: text !== undefined && text !== null && text !== ""
-        }
-
-        BusyIndicator {
-            Layout.alignment: Qt.AlignCenter
-            running: isLoading
-        }
-
-        ScrollView {
+        QbxCard {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            title: "Recent transactions"
 
             ListView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.max(200, historyList.contentHeight)
+                id: historyList
                 model: transactions
+                clip: true
+                spacing: 8
+
                 delegate: Rectangle {
-                    width: ListView.view.width
-                    height: 100
-                    border.color: "#ccc"
+                    width: historyList.width
+                    height: 88
+                    radius: QbxTheme.radiusSmall
+                    color: index % 2 === 0 ? QbxTheme.bgInput : Qt.darker(QbxTheme.bgInput, 1.05)
+                    border.color: QbxTheme.border
                     border.width: 1
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 10
-                        spacing: 5
+                        anchors.margins: 12
+                        spacing: 4
 
                         RowLayout {
                             Layout.fillWidth: true
-
                             Text {
-                                text: "TXID: " + (modelData.txid || "N/A")
-                                font.pixelSize: 12
-                                font.family: "monospace"
                                 Layout.fillWidth: true
+                                text: modelData.txid || "N/A"
+                                font.pixelSize: 11
+                                font.family: "Consolas,Courier New,monospace"
+                                color: QbxTheme.textSecondary
+                                elide: Text.ElideMiddle
                             }
-
                             Text {
                                 text: (modelData.amount || 0) + " QBX"
                                 font.pixelSize: 14
-                                font.bold: true
-                                color: (modelData.amount || 0) >= 0 ? "green" : "red"
+                                font.weight: Font.DemiBold
+                                color: (modelData.amount || 0) >= 0 ? QbxTheme.success : QbxTheme.error
                             }
                         }
 
-                        Text {
-                            text: "Category: " + (modelData.category || "N/A")
-                            font.pixelSize: 12
-                        }
-
-                        Text {
-                            text: "Confirmations: " + (modelData.confirmations || 0)
-                            font.pixelSize: 12
-                        }
-
-                        Text {
-                            text: "Time: " + (modelData.time ? new Date(modelData.time * 1000).toLocaleString() : "N/A")
-                            font.pixelSize: 12
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 16
+                            Text {
+                                text: "Category: " + (modelData.category || "—")
+                                font.pixelSize: 12
+                                color: QbxTheme.textMuted
+                            }
+                            Text {
+                                text: "Confirmations: " + (modelData.confirmations || 0)
+                                font.pixelSize: 12
+                                color: QbxTheme.textMuted
+                            }
+                            Text {
+                                text: modelData.time ? new Date(modelData.time * 1000).toLocaleString() : "—"
+                                font.pixelSize: 12
+                                color: QbxTheme.textMuted
+                            }
                         }
                     }
                 }
+
+                Text {
+                    anchors.centerIn: parent
+                    text: selectedWallet === "" ? "Select a wallet" : "No transactions yet"
+                    visible: transactions.length === 0 && !isLoading
+                    color: QbxTheme.textMuted
+                    font.pixelSize: 14
+                }
             }
         }
+    }
+
+    Text {
+        id: errorLabel
+        visible: false
     }
 }

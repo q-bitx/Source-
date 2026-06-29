@@ -1,13 +1,49 @@
 #include "clibridge.h"
 #include "logmanager.h"
+#include "qbitxembedded.h"
 #include <QDebug>
-#include <QDir>
-#include <QJsonDocument>
-#include <QJsonParseError>
 #include <QMetaType>
 #include <QVariantMap>
 #include <QRegularExpression>
 #include <QTimer>
+#include <memory>
+
+namespace {
+
+constexpr int CLI_TIMEOUT_MS = 30000;
+constexpr int STDOUT_PREVIEW_MAX = 800;
+constexpr int STDERR_PREVIEW_MAX = 1000;
+
+QString truncatePreview(const QString &s, int maxLen)
+{
+    if (s.length() <= maxLen)
+        return s;
+    return s.left(maxLen) + QStringLiteral("...");
+}
+
+void logCliResult(LogManager *logManager, const QString &method, int exitCode,
+                  const QString &out, const QString &err, const QString &commandLogLine)
+{
+    if (!logManager)
+        return;
+
+    const bool ok = exitCode == 0;
+    QString msg = QStringLiteral("CLI %1 %2 exit=%3 cmd=%4")
+                      .arg(method, ok ? QStringLiteral("OK") : QStringLiteral("FAIL"))
+                      .arg(exitCode)
+                      .arg(commandLogLine);
+
+    const QString outPreview = truncatePreview(out, STDOUT_PREVIEW_MAX);
+    const QString errPreview = truncatePreview(err, STDERR_PREVIEW_MAX);
+    if (!outPreview.isEmpty())
+        msg += QStringLiteral(" stdout=") + outPreview;
+    if (!errPreview.isEmpty())
+        msg += QStringLiteral(" stderr=") + errPreview;
+
+    logManager->append(ok ? QStringLiteral("INFO") : QStringLiteral("ERROR"), msg);
+}
+
+} // namespace
 
 CliBridge::CliBridge(SettingsManager *settings, QObject *parent)
     : QObject(parent)
@@ -36,26 +72,34 @@ void CliBridge::call(const QString &method, const QStringList &params, const QSt
         return;
     }
 
-    // Reset error flag if path is now configured
     m_pathErrorShown = false;
 
-    // Special case: use -named for getaddressbalances to ensure proper type conversion
     if (method == "getaddressbalances" && params.size() >= 2) {
         QVariantMap namedParams;
         namedParams["minconf"] = params[0].toInt();
         namedParams["include_unsafe"] = (params[1].toLower() == "true" || params[1] == "1");
         QStringList command = buildNamedCommand(method, namedParams, wallet);
-        qDebug() << "Executing named command:" << command;
         executeCommand(command, method);
         return;
     }
 
     QStringList command = buildCommand(method, params, wallet);
-    qDebug() << "Executing command:" << command;
-    if (method == "getnewaddress") {
-        qDebug() << "Generate PQ Address command (rpcwallet):" << command.join(" ");
-    }
     executeCommand(command, method);
+}
+
+void CliBridge::callWithTag(const QString &method, const QStringList &params, const QString &wallet, const QString &tag)
+{
+    if (m_settings->effectiveQbitxCliPath().isEmpty()) {
+        if (!m_pathErrorShown) {
+            emit errorOccurredWithTag(QStringLiteral("qbitx-cli path not configured"), tag);
+            m_pathErrorShown = true;
+        }
+        return;
+    }
+
+    m_pathErrorShown = false;
+    QStringList command = buildCommand(method, params, wallet);
+    executeCommand(command, method, tag);
 }
 
 void CliBridge::callNamed(const QString &method, const QVariantMap &namedParams, const QString &wallet)
@@ -70,7 +114,6 @@ void CliBridge::callNamed(const QString &method, const QVariantMap &namedParams,
 
     m_pathErrorShown = false;
     QStringList command = buildNamedCommand(method, namedParams, wallet);
-    qDebug() << "Executing named command:" << command;
     executeCommand(command, method, QString());
 }
 
@@ -86,66 +129,82 @@ void CliBridge::callNamedWithTag(const QString &method, const QVariantMap &named
 
     m_pathErrorShown = false;
     QStringList command = buildNamedCommand(method, namedParams, wallet);
-    qDebug() << "Executing named command (tagged):" << command << "tag:" << tag;
     executeCommand(command, method, tag);
 }
 
 void CliBridge::executeCommand(const QStringList &command, const QString &method, const QString &tag)
 {
-    // Create a new QProcess for this call
     QProcess *process = new QProcess(this);
+    QTimer *timeoutTimer = new QTimer(process);
+    timeoutTimer->setSingleShot(true);
+    timeoutTimer->setInterval(CLI_TIMEOUT_MS);
+
     const bool useTag = !tag.isEmpty();
+    const QString commandLogLine = QBitXEmbedded::redactCliCommandForLog(command).join(QLatin1Char(' '));
+    auto handled = std::make_shared<bool>(false);
 
-    // Connect finished signal with lambda that captures the process, method name, command, and tag
+    const auto emitError = [this, useTag, tag, handled](const QString &errMsg) {
+        if (*handled)
+            return;
+        *handled = true;
+        if (useTag)
+            QTimer::singleShot(0, this, [this, errMsg, tag]() { emit errorOccurredWithTag(errMsg, tag); });
+        else
+            QTimer::singleShot(0, this, [this, errMsg]() { emit errorOccurred(errMsg); });
+    };
+
+    connect(timeoutTimer, &QTimer::timeout, process, [process]() {
+        if (process->state() != QProcess::NotRunning)
+            process->kill();
+    });
+
     connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, process, method, command, useTag, tag](int exitCode, QProcess::ExitStatus exitStatus) {
-        QByteArray stdoutBytes = process->readAllStandardOutput();
-        QByteArray stderrBytes = process->readAllStandardError();
-        QString out = QString::fromUtf8(stdoutBytes.constData(), stdoutBytes.size()).trimmed();
-        QString err = QString::fromUtf8(stderrBytes.constData(), stderrBytes.size()).trimmed();
+            this, [this, process, method, command, commandLogLine, useTag, tag, handled, timeoutTimer,
+                   emitError](int exitCode, QProcess::ExitStatus exitStatus) {
+        timeoutTimer->stop();
+        if (*handled) {
+            process->deleteLater();
+            return;
+        }
+        *handled = true;
 
-        if (m_logManager) {
-            if (!out.isEmpty())
-                m_logManager->append("INFO", "stdout: " + out);
-            if (!err.isEmpty())
-                m_logManager->append(exitCode != 0 ? "ERROR" : "WARN", "stderr: " + err);
-            m_logManager->append("INFO", "EXIT: " + QString::number(exitCode));
+        const QByteArray stdoutBytes = process->readAllStandardOutput();
+        const QByteArray stderrBytes = process->readAllStandardError();
+        const QString out = QString::fromUtf8(stdoutBytes.constData(), stdoutBytes.size()).trimmed();
+        const QString err = QString::fromUtf8(stderrBytes.constData(), stderrBytes.size()).trimmed();
+
+        const bool timedOut = (exitStatus != QProcess::NormalExit);
+        if (timedOut) {
+            logCliResult(m_logManager, method, -1, out, err, commandLogLine);
+            emitError(QStringLiteral("qbitx-cli timed out after %1 seconds\ncommand: %2")
+                          .arg(CLI_TIMEOUT_MS / 1000)
+                          .arg(commandLogLine));
+            process->deleteLater();
+            return;
         }
 
-        QString outPreview = out.length() > 120 ? out.left(120) + "..." : out;
-        QString errPreview = err.length() > 120 ? err.left(120) + "..." : err;
-        qDebug() << "CliBridge [" << method << "] exitCode:" << exitCode
-                 << "stdout:" << outPreview << "stderr:" << errPreview;
-
-        if (exitStatus != QProcess::NormalExit || exitCode != 0) {
-            // Process error or non-zero exit code
-            // Try to parse stdout as JSON first (Bitcoin Core RPC errors come as JSON)
+        if (exitCode != 0) {
             QString errorMsg = err.isEmpty() ? out : err;
-            
-            // Check if stdout is JSON error with code -35 "already loaded" for loadwallet
+
             if (!out.isEmpty() && (out.startsWith('{') || out.startsWith('['))) {
                 QJsonParseError parseError;
                 QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8(), &parseError);
-                
+
                 if (parseError.error == QJsonParseError::NoError) {
                     QVariantMap errorObj = doc.toVariant().value<QVariantMap>();
                     int errorCode = errorObj.value("code").toInt();
                     QString errorMessage = errorObj.value("message").toString();
-                    
-                    // Suppress false error -35 "Wallet <name> is already loaded" for loadwallet
-                    if (method == "loadwallet" && errorCode == -35 && 
+
+                    if (method == "loadwallet" && errorCode == -35 &&
                         errorMessage.contains("already loaded", Qt::CaseInsensitive)) {
-                        // Treat as success - wallet is already loaded
-                        qDebug() << "CliBridge: Suppressing error -35 'already loaded' for loadwallet, treating as success";
-                        // Extract wallet name from error message (format: "Wallet <name> is already loaded")
+                        logCliResult(m_logManager, method, 0, out, err, commandLogLine);
                         QString walletName;
-                        QRegularExpression nameRegex("Wallet\\s+([^\\s]+)\\s+is\\s+already\\s+loaded", QRegularExpression::CaseInsensitiveOption);
+                        QRegularExpression nameRegex("Wallet\\s+([^\\s]+)\\s+is\\s+already\\s+loaded",
+                                                     QRegularExpression::CaseInsensitiveOption);
                         QRegularExpressionMatch match = nameRegex.match(errorMessage);
                         if (match.hasMatch()) {
                             walletName = match.captured(1);
                         } else {
-                            // Fallback: try to extract from command arguments
-                            // Command format: [qbitx-cli, -datadir=..., loadwallet, <walletName>]
                             for (int i = 0; i < command.size(); ++i) {
                                 if (command[i] == "loadwallet" && i + 1 < command.size()) {
                                     walletName = command[i + 1];
@@ -170,165 +229,86 @@ void CliBridge::executeCommand(const QStringList &command, const QString &method
                         process->deleteLater();
                         return;
                     }
-                    
-                    // Error -18 "Wallet file not found" - no global state to clear; caller handles
-                    if (errorCode == -18 && errorMessage.contains("not found", Qt::CaseInsensitive)) {
-                        qDebug() << "CliBridge: Error -18 wallet not found";
-                    }
                 }
             }
-            
-            // Detailed error for Logs/Dashboard: command, exit code, stderr
+
+            logCliResult(m_logManager, method, exitCode, out, err, commandLogLine);
             if (errorMsg.isEmpty())
                 errorMsg = QString("Process exited with code %1").arg(exitCode);
-            QString detail = QString("command: %1\nexitCode: %2\nstderr: %3")
-                .arg(command.join(" "), QString::number(exitCode), err);
-            QString errMsgFinal = errorMsg + "\n" + detail;
-            if (useTag)
-                QTimer::singleShot(0, this, [this, errMsgFinal, tag]() { emit errorOccurredWithTag(errMsgFinal, tag); });
-            else
-                QTimer::singleShot(0, this, [this, errMsgFinal]() { emit errorOccurred(errMsgFinal); });
-        } else {
-            // Success (exitCode == 0)
-            if (out.startsWith('{') || out.startsWith('[')) {
-                // Try to parse as JSON
-                QJsonParseError parseError;
-                QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8(), &parseError);
+            const QString errMsgFinal = errorMsg + "\n"
+                + QString("command: %1\nexitCode: %2\nstderr: %3")
+                      .arg(commandLogLine, QString::number(exitCode), err);
+            emitError(errMsgFinal);
+            process->deleteLater();
+            return;
+        }
 
-                if (parseError.error == QJsonParseError::NoError) {
-                    QVariant payload = doc.toVariant();
-                    if (useTag)
-                        QTimer::singleShot(0, this, [this, payload, tag]() { emit successWithTag(payload, tag); });
-                    else
-                        QTimer::singleShot(0, this, [this, payload]() { emit success(payload); });
-                } else {
-                    QString preview = out.length() > 200 ? out.left(200) + "..." : out;
-                    QString parseErrMsg = QString("JSON parse error: %1. Output: %2")
-                                      .arg(parseError.errorString())
-                                      .arg(preview);
-                    if (useTag)
-                        QTimer::singleShot(0, this, [this, parseErrMsg, tag]() { emit errorOccurredWithTag(parseErrMsg, tag); });
-                    else
-                        QTimer::singleShot(0, this, [this, parseErrMsg]() { emit errorOccurred(parseErrMsg); });
-                }
-            } else {
-                QVariant payload = QVariant(out);
+        logCliResult(m_logManager, method, exitCode, out, err, commandLogLine);
+
+        if (out.startsWith('{') || out.startsWith('[')) {
+            QJsonParseError parseError;
+            QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8(), &parseError);
+
+            if (parseError.error == QJsonParseError::NoError) {
+                QVariant payload = doc.toVariant();
                 if (useTag)
                     QTimer::singleShot(0, this, [this, payload, tag]() { emit successWithTag(payload, tag); });
                 else
                     QTimer::singleShot(0, this, [this, payload]() { emit success(payload); });
+            } else {
+                const QString preview = truncatePreview(out, 200);
+                const QString parseErrMsg = QString("JSON parse error: %1. Output: %2")
+                                                .arg(parseError.errorString())
+                                                .arg(preview);
+                emitError(parseErrMsg);
             }
+        } else {
+            QVariant payload = QVariant(out);
+            if (useTag)
+                QTimer::singleShot(0, this, [this, payload, tag]() { emit successWithTag(payload, tag); });
+            else
+                QTimer::singleShot(0, this, [this, payload]() { emit success(payload); });
         }
 
         process->deleteLater();
     });
-    
-    // Connect error signal
+
     connect(process, &QProcess::errorOccurred,
-            this, [this, process, useTag, tag](QProcess::ProcessError error) {
-        QByteArray stdoutBytes = process->readAllStandardOutput();
-        QByteArray stderrBytes = process->readAllStandardError();
-        
-        QString out = QString::fromUtf8(stdoutBytes).trimmed();
-        QString err = QString::fromUtf8(stderrBytes).trimmed();
-        
-        QString errorMsg;
-        switch (error) {
-        case QProcess::FailedToStart:
-            errorMsg = "Failed to start qbitx-cli process";
-            break;
-        case QProcess::Crashed:
-            errorMsg = "qbitx-cli process crashed";
-            break;
-        case QProcess::Timedout:
-            errorMsg = "qbitx-cli process timed out";
-            break;
-        case QProcess::WriteError:
-            errorMsg = "Write error to qbitx-cli process";
-            break;
-        case QProcess::ReadError:
-            errorMsg = "Read error from qbitx-cli process";
-            break;
-        default:
-            errorMsg = "Unknown process error";
-        }
-        
-        // Include stderr/stdout if available
-        if (!err.isEmpty()) {
-            errorMsg += ": " + (err.length() > 200 ? err.left(200) + "..." : err);
-        } else if (!out.isEmpty()) {
-            errorMsg += ": " + (out.length() > 200 ? out.left(200) + "..." : out);
-        }
-        
-        qDebug() << "CliBridge QProcess error:" << errorMsg;
-        QString errMsg = errorMsg;
-        if (useTag)
-            QTimer::singleShot(0, this, [this, errMsg, tag]() { emit errorOccurredWithTag(errMsg, tag); });
-        else
-            QTimer::singleShot(0, this, [this, errMsg]() { emit errorOccurred(errMsg); });
+            this, [this, process, useTag, tag, handled, timeoutTimer, commandLogLine, method,
+                   emitError](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart || *handled)
+            return;
+
+        timeoutTimer->stop();
+        *handled = true;
+
+        const QString errMsg = QStringLiteral("Failed to start qbitx-cli (%1)\ncommand: %2")
+                                   .arg(method, commandLogLine);
+        logCliResult(m_logManager, method, -1, QString(), QStringLiteral("Failed to start"), commandLogLine);
+        emitError(errMsg);
         process->deleteLater();
     });
-
-    if (m_logManager)
-        m_logManager->append("INFO", "CMD: " + command.join(" "));
 
     process->start(command.first(), command.mid(1));
-    if (!process->waitForStarted(5000)) {
-        QString msg = QString("Failed to start qbitx-cli process\ncommand: %1").arg(command.join(" "));
-        if (useTag)
-            QTimer::singleShot(0, this, [this, msg, tag]() { emit errorOccurredWithTag(msg, tag); });
-        else
-            QTimer::singleShot(0, this, [this, msg]() { emit errorOccurred(msg); });
-        process->deleteLater();
-        return;
-    }
-}
-
-QString CliBridge::effectiveDatadirForCli()
-{
-    QString datadir = m_settings->datadir();
-    if (datadir.isEmpty()) {
-        return QString();
-    }
-    if (!QDir(datadir).exists()) {
-        qWarning() << "CliBridge: datadir does not exist, falling back to default qbitx-cli behavior:" << datadir;
-        m_settings->setDatadir(QString());
-        return QString();
-    }
-    return QDir::toNativeSeparators(datadir);
+    timeoutTimer->start();
 }
 
 QStringList CliBridge::buildCommand(const QString &method, const QStringList &params, const QString &wallet)
 {
     QStringList args;
+    QBitXEmbedded::appendConnectionCliArgs(m_settings, &args);
 
-    QString datadir = effectiveDatadirForCli();
-    if (!datadir.isEmpty()) {
-        args << "-datadir=" + datadir;
-    }
-
-    // Add network flag if specified (regtest/testnet/signet)
     QString network = m_settings->network();
     if (!network.isEmpty() && network != "main") {
         args << "-" + network;
     }
 
-    // Add RPC credentials ONLY if BOTH are set (otherwise use cookie auth)
-    QString rpcuser = m_settings->rpcuser();
-    QString rpcpassword = m_settings->rpcpassword();
-    if (!rpcuser.isEmpty() && !rpcpassword.isEmpty()) {
-        args << "-rpcuser=" + rpcuser;
-        args << "-rpcpassword=" + rpcpassword;
-    }
-
-    // Global wallet operations should NOT use -rpcwallet
     QStringList globalWalletMethods = {"listwallets", "listwalletdir", "createwallet", "loadwallet", "unloadwallet", "restorewallet"};
     bool isGlobalOperation = globalWalletMethods.contains(method);
 
     if (!isGlobalOperation)
         args << baseArgsForWallet(wallet);
 
-    // Add method and params
     args << method;
     args << params;
 
@@ -342,42 +322,26 @@ QStringList CliBridge::buildCommand(const QString &method, const QStringList &pa
 QStringList CliBridge::buildNamedCommand(const QString &method, const QVariantMap &namedParams, const QString &wallet)
 {
     QStringList args;
+    QBitXEmbedded::appendConnectionCliArgs(m_settings, &args);
 
-    QString datadir = effectiveDatadirForCli();
-    if (!datadir.isEmpty()) {
-        args << "-datadir=" + datadir;
-    }
-
-    // Add network flag if specified (regtest/testnet/signet)
     QString network = m_settings->network();
     if (!network.isEmpty() && network != "main") {
         args << "-" + network;
     }
 
-    // Add RPC credentials ONLY if BOTH are set (otherwise use cookie auth)
-    QString rpcuser = m_settings->rpcuser();
-    QString rpcpassword = m_settings->rpcpassword();
-    if (!rpcuser.isEmpty() && !rpcpassword.isEmpty()) {
-        args << "-rpcuser=" + rpcuser;
-        args << "-rpcpassword=" + rpcpassword;
-    }
-
-    // Global wallet operations should NOT use -rpcwallet
     QStringList globalWalletMethods = {"listwallets", "listwalletdir", "createwallet", "loadwallet", "unloadwallet", "restorewallet"};
     bool isGlobalOperation = globalWalletMethods.contains(method);
 
     if (!isGlobalOperation)
         args << baseArgsForWallet(wallet);
 
-    // Add -named flag and method
     args << "-named";
     args << method;
 
-    // Add named parameters as key=value pairs
     for (auto it = namedParams.begin(); it != namedParams.end(); ++it) {
         QString key = it.key();
         QVariant value = it.value();
-        
+
         QString valueStr;
         const int tid = value.metaType().id();
         if (tid == QMetaType::Bool) {
@@ -387,7 +351,7 @@ QStringList CliBridge::buildNamedCommand(const QString &method, const QVariantMa
         } else {
             valueStr = value.toString();
         }
-        
+
         args << key + "=" + valueStr;
     }
 

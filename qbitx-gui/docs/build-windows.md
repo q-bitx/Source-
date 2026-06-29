@@ -37,6 +37,18 @@ cmake --build build-win -j$(nproc)
   `ninja -C build-win -t commands | grep -F "/usr/include"` → should print nothing.
 - Windows binary:
   `file build-win/qbitx-gui.exe` → `PE32+ executable (...) Windows`
+- Application icon is embedded via `app_icon.rc` from `assets/qbitx_wallet_icon.ico`.
+  Regenerate placeholder sizes with `python3 scripts/gen-wallet-icon.py` (requires Pillow).
+
+## Installer icon
+
+Build the installer from `installer/` with Inno Setup after bundling:
+
+```bash
+# SetupIconFile and shortcuts use assets/qbitx_wallet_icon.ico and {app}\qbitx-gui.exe
+```
+
+See `installer/qbitx-wallet.iss`.
 
 ## Custom Qt paths
 

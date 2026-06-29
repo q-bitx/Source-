@@ -1,0 +1,2 @@
+module theme
+singleton QbxTheme 1.0 QbxTheme.qml

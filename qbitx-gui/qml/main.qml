@@ -4,15 +4,149 @@ import QtQuick.Layouts 1.15
 import QBitX 1.0
 import "components" 1.0
 import "pages" as Pages
+import "theme" 1.0
 
 ApplicationWindow {
     id: window
-    width: 1200
-    height: 800
+    width: 1280
+    height: 820
+    minimumWidth: 960
+    minimumHeight: 640
     visible: true
-    title: "qbitx-gui"
+    title: "Q-BitX Wallet"
+    color: QbxTheme.bgApp
 
     property int currentPage: 0
+    property bool shutdownRequested: false
+
+    function hideToTray() {
+        if (trayManager && trayManager.available)
+            trayManager.hideToTray()
+        else
+            window.visible = false
+    }
+
+    function restoreFromTray() {
+        window.visible = true
+        if (trayManager)
+            trayManager.restoreFromTray()
+        else {
+            window.show()
+            window.raise()
+            window.requestActivate()
+        }
+        triggerPageRefresh()
+    }
+
+    function exitGracefully() {
+        shutdownRequested = true
+        window.visible = false
+        if (trayManager)
+            trayManager.hideTrayIcon()
+        if (nodeManager)
+            nodeManager.requestGracefulShutdown()
+    }
+
+    onClosing: function(close) {
+        if (shutdownRequested) {
+            close.accepted = true
+            return
+        }
+        close.accepted = false
+        closeChoiceDialog.open()
+    }
+
+    Connections {
+        target: trayManager
+        function onOpenRequested() {
+            restoreFromTray()
+        }
+        function onExitRequested() {
+            exitGracefully()
+        }
+    }
+
+    Dialog {
+        id: closeChoiceDialog
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(480, Math.max(420, window.width - 80))
+        standardButtons: Dialog.NoButton
+        header: null
+        footer: null
+        padding: 0
+
+        background: Rectangle {
+            color: QbxTheme.bgCard
+            radius: QbxTheme.radiusMedium
+            border.color: QbxTheme.border
+            border.width: 1
+        }
+
+        contentItem: Item {
+            implicitWidth: closeChoiceDialog.width
+            implicitHeight: closeDialogBody.implicitHeight + 48
+
+            ColumnLayout {
+                id: closeDialogBody
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 24
+                spacing: 12
+
+                Text {
+                    text: "QBitX Wallet"
+                    font.pixelSize: 18
+                    font.weight: Font.DemiBold
+                    color: QbxTheme.accentGlow
+                    Layout.fillWidth: true
+                }
+
+                Text {
+                    text: "What do you want to do?"
+                    font.pixelSize: 14
+                    color: QbxTheme.textPrimary
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                    Layout.bottomMargin: 4
+                }
+
+                QbxButton {
+                    text: "Minimize to tray"
+                    primary: true
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 44
+                    Layout.maximumHeight: 44
+                    visible: trayManager && trayManager.available
+                    onClicked: {
+                        closeChoiceDialog.close()
+                        hideToTray()
+                    }
+                }
+
+                QbxButton {
+                    text: "Stop node and exit"
+                    primary: !(trayManager && trayManager.available)
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 44
+                    Layout.maximumHeight: 44
+                    onClicked: {
+                        closeChoiceDialog.close()
+                        exitGracefully()
+                    }
+                }
+
+                QbxButton {
+                    text: "Cancel"
+                    compact: true
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.topMargin: 4
+                    onClicked: closeChoiceDialog.close()
+                }
+            }
+        }
+    }
 
     function triggerPageRefresh() {
         if (currentPage === 0 && dashboardPage) dashboardPage.refresh()
@@ -34,51 +168,89 @@ ApplicationWindow {
         if (settingsPage) settingsPage.refresh()
     }
 
-    // Startup: listwallets + trigger first-page refresh
-    Component.onCompleted: {
-        Qt.callLater(function() {
-            if (settingsManager.effectiveQbitxCliPath() !== "" && settingsManager.checkCliAvailable())
-                cliBridge.call("listwallets", [], "")
-            triggerPageRefresh()
-        })
-    }
-
-    // REMOVED: Global auto-selection moved entirely to Wallets.qml for monotonic control
-    // REMOVED: Input diagnosis probe (fullscreen Item+MouseArea) — it was blocking all clicks; no MouseArea in main.qml.
-
-    // Optional debug label: does NOT capture input (no MouseArea/TapHandler). Off by default.
-    Text {
-        visible: false
-        enabled: false
-        text: "Top item"
-        font.pixelSize: 10
-        color: "#888"
-        x: 8
-        y: 8
+    Connections {
+        target: walletManager
+        function onLoadedWalletsChanged() {
+            if (addressesPage) addressesPage.refresh()
+            if (sendPage) sendPage.refresh()
+            if (historyPage) historyPage.refresh()
+        }
     }
 
     RowLayout {
         anchors.fill: parent
         spacing: 0
 
-        // Sidebar navigation
         Rectangle {
-            Layout.preferredWidth: 260
+            Layout.preferredWidth: QbxTheme.sidebarWidth
             Layout.fillHeight: true
-            color: "#1a1a1a"
+            color: QbxTheme.bgSidebar
+
+            Rectangle {
+                anchors.right: parent.right
+                width: 1
+                height: parent.height
+                color: QbxTheme.border
+            }
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 12
-                spacing: 8
+                anchors.margins: 16
+                spacing: 6
 
-                Text {
+                RowLayout {
                     Layout.fillWidth: true
-                    text: "Q-BitX"
-                    font.pixelSize: 20
-                    font.bold: true
-                    color: "white"
-                    padding: 10
+                    Layout.bottomMargin: 12
+                    spacing: 10
+
+                    Item {
+                        Layout.preferredWidth: 48
+                        Layout.preferredHeight: 48
+
+                        Image {
+                            id: sidebarLogo
+                            anchors.fill: parent
+                            source: "qrc:/QBitX/assets/sidebar_logo.png"
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true
+                            mipmap: true
+                            visible: status === Image.Ready
+                        }
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: QbxTheme.radiusSmall
+                            visible: sidebarLogo.status !== Image.Ready
+                            color: Qt.rgba(QbxTheme.accent.r, QbxTheme.accent.g, QbxTheme.accent.b, 0.2)
+                            border.color: QbxTheme.accent
+                            border.width: 1
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: "Q"
+                                font.pixelSize: 20
+                                font.weight: Font.Bold
+                                color: QbxTheme.accentGlow
+                                visible: sidebarLogo.status !== Image.Ready
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        spacing: 2
+                        Layout.fillWidth: true
+                        Text {
+                            text: "Q-BitX"
+                            font.pixelSize: 18
+                            font.weight: Font.Bold
+                            color: QbxTheme.textPrimary
+                        }
+                        Text {
+                            text: "Desktop Wallet"
+                            font.pixelSize: 11
+                            color: QbxTheme.textMuted
+                        }
+                    }
                 }
 
                 SidebarButton {
@@ -113,22 +285,69 @@ ApplicationWindow {
                 }
 
                 Item { Layout.fillHeight: true }
+
+                SidebarButton {
+                    text: "Settings"
+                    active: currentPage === 6
+                    onClicked: { currentPage = 6; triggerPageRefresh() }
+                }
             }
         }
 
-        // Main content area
-        StackLayout {
+        Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: currentPage
+            color: QbxTheme.bgContent
+            clip: true
 
-            Pages.Dashboard { id: dashboardPage }
-            Pages.Wallets { id: walletsPage }
-            Pages.Addresses { id: addressesPage }
-            Pages.Send { id: sendPage }
-            Pages.History { id: historyPage }
-            Pages.Logs { id: logsPage }
-            Pages.Settings { id: settingsPage }
+            StackLayout {
+                anchors.fill: parent
+                anchors.margins: 0
+                currentIndex: currentPage
+
+                Pages.Dashboard {
+                    id: dashboardPage
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    padding: 0
+                }
+                Pages.Wallets {
+                    id: walletsPage
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    padding: 0
+                }
+                Pages.Addresses {
+                    id: addressesPage
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    padding: 0
+                }
+                Pages.Send {
+                    id: sendPage
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    padding: 0
+                }
+                Pages.History {
+                    id: historyPage
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    padding: 0
+                }
+                Pages.Logs {
+                    id: logsPage
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    padding: 0
+                }
+                Pages.Settings {
+                    id: settingsPage
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    padding: 0
+                }
+            }
         }
     }
 }
