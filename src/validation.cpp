@@ -4287,6 +4287,16 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
     if (block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams))
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "bad-diffbits", "incorrect proof of work");
 
+    if (consensusParams.nHardCheckpointHeight >= 0 &&
+        !consensusParams.hardCheckpointHash.IsNull() &&
+        nHeight == consensusParams.nHardCheckpointHeight &&
+        block.GetHash() != consensusParams.hardCheckpointHash) {
+        return state.Invalid(
+            BlockValidationResult::BLOCK_INVALID_HEADER,
+            "bad-checkpoint",
+            strprintf("rejected block at hard checkpoint height %d", nHeight));
+    }
+
     // Check timestamp against prev
     if (block.GetBlockTime() <= pindexPrev->GetMedianTimePast())
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "time-too-old", "block's timestamp is too early");

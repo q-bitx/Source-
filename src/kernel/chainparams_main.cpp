@@ -132,9 +132,14 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nTimeout = 1628640000; // August 11th, 2021
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].min_activation_height = 709632; // Approximately November 12th, 2021
 
-        // Q-BitX mainnet sync metadata from confirmed block 179000.
-        consensus.nMinimumChainWork = uint256{"00000000000000000000000000000000000000000000004f6d179385af3a0d58"};
-        consensus.defaultAssumeValid = uint256{"0000000000000e6e49f6e24b64afd490ab71324c1d3e591c1d112d05064e9eb1"};
+        // v0.3.2 min chain work / assume-valid caused strict headers presync to reject the
+        // historical mainnet chain at height 2016; disabled in v0.3.3.
+        consensus.nMinimumChainWork = uint256{};
+        consensus.defaultAssumeValid = uint256{};
+
+        // Hard checkpoint at confirmed mainnet block 180000 (anchors history before this height).
+        consensus.nHardCheckpointHeight = 180000;
+        consensus.hardCheckpointHash = uint256{"00000000000007d3cfb4ac86790ddf7e5eb7359793981356479f0cdf67ef7af4"};
 
         /**
          * The message start string is designed to be unlikely to occur in normal data.

@@ -144,6 +144,10 @@ struct Params {
     /** By default assume that the signatures in ancestors of this block are valid */
     uint256 defaultAssumeValid;
 
+    /** Hard checkpoint height (-1 = disabled). At this height the block hash must match hardCheckpointHash. */
+    int nHardCheckpointHeight{-1};
+    uint256 hardCheckpointHash{};
+
     /**
      * If true, witness commitments contain a payload equal to a Bitcoin Script solution
      * to the signet challenge. See BIP325.

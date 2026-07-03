@@ -370,6 +370,8 @@ BOOST_AUTO_TEST_CASE(pq_witness_chainparams_heights)
     const auto reg_params = CreateChainParams(*m_node.args, ChainType::REGTEST);
     BOOST_CHECK_EQUAL(reg_params->GetConsensus().nPQWitnessHeight, 10);
     BOOST_CHECK_EQUAL(reg_params->GetConsensus().nPQSigopsHeight, 1);
+    BOOST_CHECK_EQUAL(reg_params->GetConsensus().nHardCheckpointHeight, -1);
+    BOOST_CHECK(reg_params->GetConsensus().hardCheckpointHash.IsNull());
 }
 
 //! Active mainnet params must come from chainparams_main.cpp (Q-BitX), not stale duplicates.
@@ -403,6 +405,10 @@ BOOST_AUTO_TEST_CASE(active_mainnet_chainparams_are_qbitx)
 
     BOOST_CHECK(consensus.nMinimumChainWork.IsNull());
     BOOST_CHECK(consensus.defaultAssumeValid.IsNull());
+
+    BOOST_CHECK_EQUAL(consensus.nHardCheckpointHeight, 180000);
+    BOOST_CHECK_EQUAL(consensus.hardCheckpointHash.GetHex(),
+                      "00000000000007d3cfb4ac86790ddf7e5eb7359793981356479f0cdf67ef7af4");
 }
 
 BOOST_AUTO_TEST_CASE(mainnet_buried_deployments_before_pq_witness)
