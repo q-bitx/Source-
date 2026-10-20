@@ -24,6 +24,7 @@ add_library(bitcoin_wallet STATIC EXCLUDE_FROM_ALL
   rpc/pqsendfrom.cpp
   rpc/pqsendto.cpp
   rpc/pqconsolidatelegacy.cpp
+  rpc/pqmigratelegacy.cpp
   rpc/coins.cpp
   rpc/encrypt.cpp
   rpc/signmessage.cpp
@@ -53,5 +54,6 @@ target_link_libraries(bitcoin_wallet
 
 if(USE_BDB)
   target_sources(bitcoin_wallet PRIVATE bdb.cpp salvage.cpp)
+  target_compile_definitions(bitcoin_wallet PUBLIC USE_BDB=1)
   target_link_libraries(bitcoin_wallet PUBLIC BerkeleyDB::BerkeleyDB)
 endif()

@@ -20,14 +20,56 @@
 #include <policy/policy.h>
 #include <pow.h>
 #include <primitives/transaction.h>
+#include <script/script.h>
 #include <util/moneystr.h>
 #include <util/time.h>
 #include <validation.h>
 
 #include <algorithm>
 #include <utility>
+#include <vector>
 
 namespace node {
+namespace {
+CTxOut WitnessCommitmentShape()
+{
+    CTxOut out;
+    out.nValue = 0;
+    out.scriptPubKey.resize(MINIMUM_WITNESS_COMMITMENT);
+    out.scriptPubKey[0] = OP_RETURN;
+    out.scriptPubKey[1] = 0x24;
+    out.scriptPubKey[2] = 0xaa;
+    out.scriptPubKey[3] = 0x21;
+    out.scriptPubKey[4] = 0xa9;
+    out.scriptPubKey[5] = 0xed;
+    return out;
+}
+
+void AssertTransactionsPresent(const CBlock& block)
+{
+    for (const CTransactionRef& tx : block.vtx) {
+        assert(tx);
+    }
+}
+
+/** PQ P2PKH is the only consensus-valid coinbase vout[0] after genesis. */
+CScript CanonicalPqPayoutScript()
+{
+    const std::vector<unsigned char> keyhash(20, 0);
+    return CScript() << OP_DUP << OP_HASH160 << keyhash << OP_EQUALVERIFY << OP_CHECKSIGDILITHIUM;
+}
+
+CScript CoinbaseScriptSigPadded(int height, size_t target_size)
+{
+    CScript sig = CScript() << static_cast<int64_t>(height);
+    // target_size is MAX_COINBASE_SCRIPTSIG_SIZE (100). That is below the
+    // CompactSize step at 253, so padding does not widen the length prefix.
+    assert(target_size < 253);
+    assert(sig.size() <= target_size);
+    sig.resize(target_size);
+    return sig;
+}
+} // namespace
 
 int64_t GetMinimumTime(const CBlockIndex* pindexPrev, const int64_t difficulty_adjustment_interval)
 {
@@ -111,6 +153,8 @@ void BlockAssembler::resetBlock()
 
     // These counters do not include coinbase tx
     nBlockTx = 0;
+    nBlockSerializedTxBytes = 0;
+    m_coinbase_serialized_reserve = 0;
     nFees = 0;
 }
 
@@ -122,10 +166,6 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 
     pblocktemplate.reset(new CBlockTemplate());
     CBlock* const pblock = &pblocktemplate->block; // pointer for convenience
-
-    // Add dummy coinbase tx as first transaction. It is skipped by the
-    // getblocktemplate RPC and mining interface consumers must not use it.
-    pblock->vtx.emplace_back();
 
     LOCK(::cs_main);
     CBlockIndex* pindexPrev = m_chainstate.m_chain.Tip();
@@ -141,6 +181,9 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 
     pblock->nTime = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
     m_lock_time_cutoff = pindexPrev->GetMedianTimePast();
+
+    // Real coinbase placeholder. Package selection must never serialize a null CTransactionRef.
+    InstallCoinbasePlaceholder(pindexPrev);
 
     int nPackagesSelected = 0;
     int nDescendantsUpdated = 0;
@@ -166,7 +209,18 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     pblocktemplate->vchCoinbaseCommitment = m_chainstate.m_chainman.GenerateCoinbaseCommitment(*pblock, pindexPrev);
 
     const int tmpl_wscale{GetWitnessDiscountScale(chainparams.GetConsensus(), nHeight)};
+    AssertTransactionsPresent(*pblock);
     const size_t block_serialized_size{::GetSerializeSize(TX_WITH_WITNESS(*pblock))};
+    const uint64_t accounted_serialized{
+        80 + static_cast<uint64_t>(GetSizeOfCompactSize(pblock->vtx.size())) +
+        m_coinbase_serialized_reserve + nBlockSerializedTxBytes};
+    // m_coinbase_serialized_reserve is the documented pool-coinbase upper bound,
+    // so it may exceed the coinbase this node wrote. It must not fall short of
+    // that coinbase's witness serialization.
+    if (block_serialized_size > accounted_serialized) {
+        throw std::runtime_error(strprintf("%s: serialized size %u exceeds accounted bytes %u",
+                                            __func__, block_serialized_size, accounted_serialized));
+    }
     LogPrintf("CreateNewBlock(): block serialized_size=%u bytes (max=%u), weight=%u txs=%u fees=%ld sigops=%d\n",
               block_serialized_size,
               Consensus::GetMaxBlockSerializedSize(chainparams.GetConsensus(), nHeight),
@@ -219,15 +273,81 @@ bool BlockAssembler::TestPackage(uint64_t packageSize, int64_t packageSigOpsCost
     if (nBlockSigOpsCost + packageSigOpsCost >= MAX_BLOCK_SIGOPS_COST) {
         return false;
     }
-    if (Consensus::EnforcesBlockSerializedSizeLimit(chainparams.GetConsensus(), nHeight)) {
-        const size_t current_serialized{::GetSerializeSize(TX_WITH_WITNESS(pblocktemplate->block))};
-        const unsigned int max_serialized{Consensus::GetMaxBlockSerializedSize(chainparams.GetConsensus(), nHeight)};
-        // packageSize is vsize; use it as a conservative lower bound on added physical bytes.
-        if (current_serialized + packageSize > max_serialized) {
-            return false;
-        }
-    }
+    // Physical serialized size is checked separately in TestAddedSerializedSize
+    // once the ancestor transactions are known. packageSize is vsize and is not
+    // a byte count, particularly after the PQ witness discount changes.
     return true;
+}
+
+bool BlockAssembler::TestAddedSerializedSize(uint64_t extra_bytes, uint64_t extra_txs) const
+{
+    if (!Consensus::EnforcesBlockSerializedSizeLimit(chainparams.GetConsensus(), nHeight)) {
+        return true;
+    }
+    const uint64_t tx_count{1 + nBlockTx + extra_txs};
+    const uint64_t projected{
+        80 + static_cast<uint64_t>(GetSizeOfCompactSize(tx_count)) +
+        m_coinbase_serialized_reserve + nBlockSerializedTxBytes + extra_bytes};
+    const uint64_t max_serialized{Consensus::GetMaxBlockSerializedSize(chainparams.GetConsensus(), nHeight)};
+    return projected <= max_serialized;
+}
+
+void BlockAssembler::InstallCoinbasePlaceholder(const CBlockIndex* pindexPrev)
+{
+    CMutableTransaction coinbase;
+    coinbase.vin.resize(1);
+    coinbase.vin[0].prevout.SetNull();
+    coinbase.vin[0].scriptSig = CScript() << static_cast<int64_t>(nHeight) << OP_0;
+    coinbase.vout.resize(1);
+    coinbase.vout[0].scriptPubKey = m_options.coinbase_output_script;
+    coinbase.vout[0].nValue = 0;
+
+    // Reserve the largest coinbase a pool can submit inside the GBT contract,
+    // not the short BIP34 script this node stores in vtx[0].
+    // scriptSig is padded to the consensus maximum (100). vout[0] is at least
+    // a canonical PQ P2PKH, which is the only script CheckBlock accepts there.
+    // The commitment output is always appended by GenerateCoinbaseCommitment,
+    // including on testnet where the byte cap starts at 220000 and segwit at
+    // 834624. The 32-byte nonce is included only when segwit is active, matching
+    // UpdateUncommittedBlockStructures. GBT_POOL_COINBASE_EXTRA_OUTPUT_BYTES
+    // then covers additional pool outputs. nValue is a fixed 8-byte field, so
+    // subsidy versus zero does not change the size.
+    CMutableTransaction reserved;
+    reserved.vin.resize(1);
+    reserved.vin[0].prevout.SetNull();
+    reserved.vin[0].scriptSig = CoinbaseScriptSigPadded(nHeight, MAX_COINBASE_SCRIPTSIG_SIZE);
+    const CScript& configured_payout{m_options.coinbase_output_script};
+    const CScript canonical_payout{CanonicalPqPayoutScript()};
+    reserved.vout.resize(1);
+    reserved.vout[0].scriptPubKey = configured_payout.size() >= canonical_payout.size() ? configured_payout : canonical_payout;
+    reserved.vout[0].nValue = 0;
+    reserved.vout.push_back(WitnessCommitmentShape());
+    const bool segwit_active{DeploymentActiveAfter(pindexPrev, m_chainstate.m_chainman, Consensus::DEPLOYMENT_SEGWIT)};
+    if (segwit_active) {
+        reserved.vin[0].scriptWitness.stack.assign(1, std::vector<unsigned char>(32, 0x00));
+    }
+    const CTransactionRef reserved_tx{MakeTransactionRef(std::move(reserved))};
+    m_coinbase_serialized_reserve = reserved_tx->GetTotalSize() + GBT_POOL_COINBASE_EXTRA_OUTPUT_BYTES;
+
+    // Weight accounting must leave the same coinbase room. Extra outputs are
+    // non-witness, so they weigh (bytes * k). Header and tx-count CompactSize
+    // are outside the coinbase. A 5-byte count covers every block that can
+    // fit under the 8,000,000-byte cap (the 9-byte CompactSize starts only
+    // above 2^32 transactions).
+    const int scale{GetWitnessDiscountScale(chainparams.GetConsensus(), nHeight)};
+    const int64_t reserved_weight{
+        GetTransactionWeightWithScale(*reserved_tx, scale) +
+        static_cast<int64_t>(GBT_POOL_COINBASE_EXTRA_OUTPUT_BYTES) * scale};
+    const int64_t overhead_weight{static_cast<int64_t>(80 + 5) * scale};
+    const uint64_t needed{static_cast<uint64_t>(overhead_weight + reserved_weight)};
+    const uint64_t weight_cap{std::min(
+        m_options.nBlockMaxWeight,
+        static_cast<uint64_t>(Consensus::GetMaxBlockWeight(chainparams.GetConsensus(), nHeight)))};
+    if (needed > nBlockWeight) {
+        nBlockWeight = std::min(needed, weight_cap);
+    }
+
+    pblocktemplate->block.vtx.assign(1, MakeTransactionRef(std::move(coinbase)));
 }
 
 // Perform transaction-level checks before adding to block:
@@ -245,6 +365,7 @@ bool BlockAssembler::TestPackageTransactions(const CTxMemPool::setEntries& packa
 void BlockAssembler::AddToBlock(CTxMemPool::txiter iter)
 {
     pblocktemplate->block.vtx.emplace_back(iter->GetSharedTx());
+    nBlockSerializedTxBytes += iter->GetTx().GetTotalSize();
     pblocktemplate->vTxFees.push_back(iter->GetFee());
     pblocktemplate->vTxSigOpsCost.push_back(iter->GetSigOpCost());
     nBlockWeight += iter->GetTxWeight();
@@ -429,6 +550,25 @@ void BlockAssembler::addPackageTxs(int& nPackagesSelected, int& nDescendantsUpda
             if (fUsingModified) {
                 mapModifiedTx.get<ancestor_score>().erase(modit);
                 failedTx.insert(iter->GetSharedTx()->GetHash());
+            }
+            continue;
+        }
+
+        uint64_t package_bytes{0};
+        for (CTxMemPool::txiter it : ancestors) {
+            package_bytes += it->GetTx().GetTotalSize();
+        }
+        if (!TestAddedSerializedSize(package_bytes, ancestors.size())) {
+            if (fUsingModified) {
+                mapModifiedTx.get<ancestor_score>().erase(modit);
+                failedTx.insert(iter->GetSharedTx()->GetHash());
+            }
+            ++nConsecutiveFailed;
+            if (nConsecutiveFailed > MAX_CONSECUTIVE_FAILURES && nBlockWeight >
+                    std::min(m_options.nBlockMaxWeight,
+                             static_cast<size_t>(Consensus::GetMaxBlockWeight(chainparams.GetConsensus(), nHeight)))
+                    - m_options.block_reserved_weight) {
+                break;
             }
             continue;
         }

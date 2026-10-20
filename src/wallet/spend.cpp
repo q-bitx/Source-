@@ -35,6 +35,7 @@
 #include <wallet/receive.h>
 #include <wallet/spend.h>
 #include <wallet/transaction.h>
+#include <wallet/pq_sign.h>
 #include <wallet/wallet.h>
 
 namespace wallet {
@@ -1389,15 +1390,18 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     // Calculate the transaction fee
     int nBytes = -1;
     TxSize tx_sizes{0, 0}; // Declare in outer scope for later use in size check
-    
-    // For PQ/Dilithium inputs, always use real signing to get accurate size
-    // Standard estimation underestimates PQ spends, causing "Fee needed > fee paid" errors
+    std::map<COutPoint, Coin> coins;
+    for (const auto& coin : selected_coins) {
+        coins[coin->outpoint] = Coin(coin->txout, coin->depth, coin->spendable);
+    }
+
+    // For PQ/Dilithium inputs, sign a copy with the per-input Dilithium signer
+    // so the fee uses the real weight. Ordinary sends stay inside the 400k policy.
     if (has_pq_inputs) {
-        // Make a copy of the transaction for signing
         CMutableTransaction tmp_tx = txNew;
-        // Sign the transaction to get accurate size
-        if (!wallet.DilithiumSignTransaction(tmp_tx)) {
-            return util::Error{_("Missing solving data for estimating transaction size")};
+        bilingual_str pq_error;
+        if (!SignPqWalletInputs(wallet, tmp_tx, coins, pq_error)) {
+            return util::Error{pq_error};
         }
         // Calculate vsize and weight from the signed transaction
         const CTransaction signed_tx(tmp_tx);
@@ -1492,17 +1496,11 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     // Only call DilithiumSignTransaction if PQ scripts are present
     if (sign) {
         if (has_pq_inputs) {
-            // PQ inputs require Dilithium signing
-            if (!wallet.DilithiumSignTransaction(txNew)) {
-                return util::Error{_("Dilithium signing failed")};
+            bilingual_str pq_error;
+            if (!SignPqWalletInputs(wallet, txNew, coins, pq_error)) {
+                return util::Error{pq_error};
             }
         } else {
-            // Standard inputs use regular wallet signing
-            // Build coins map from selected_coins for SignTransaction
-            std::map<COutPoint, Coin> coins;
-            for (const auto& coin : selected_coins) {
-                coins[coin->outpoint] = Coin(coin->txout, coin->depth, coin->spendable);
-            }
             std::map<int, bilingual_str> input_errors;
             if (!wallet.SignTransaction(txNew, coins, SIGHASH_DEFAULT, input_errors)) {
                 if (!input_errors.empty()) {

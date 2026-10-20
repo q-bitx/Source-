@@ -128,13 +128,15 @@ void DeserializeFileDB(const fs::path& path, Data&& data)
 }
 } // namespace
 
+static fs::path WithSuffix(fs::path path, const char* suffix)
+{
+    path += suffix;
+    return path;
+}
+
 CBanDB::CBanDB(fs::path ban_list_path)
-   // : m_banlist_dat(ban_list_path / ".dat"),
-   //   m_banlist_json(ban_list_path / ".json")
-    : m_banlist_dat(ban_list_path / "banlist.dat"),
-      m_banlist_json(ban_list_path / "banlist.json")
-
-
+    : m_banlist_dat(WithSuffix(ban_list_path, ".dat")),
+      m_banlist_json(WithSuffix(ban_list_path, ".json"))
 {
 }
 

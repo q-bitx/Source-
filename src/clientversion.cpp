@@ -55,8 +55,18 @@ static std::string FormatVersion(int nVersion)
 
 std::string FormatFullVersion()
 {
-    static const std::string CLIENT_BUILD(BUILD_DESC BUILD_SUFFIX);
-    return CLIENT_BUILD;
+    // bitcoin-build-info.h always #defines BUILD_GIT_TAG, including as an
+    // empty string when cmake has not substituted a tag. An empty tag must
+    // not blank -version. A non-empty tag is used only for a clean tagged
+    // commit. Otherwise the descriptive commit string (base tag, hash, dirty)
+    // is used. This does not change CLIENT_VERSION or the BIP14 subversion.
+#ifdef BUILD_GIT_TAG
+    if (BUILD_GIT_TAG[0] != '\0') return BUILD_GIT_TAG;
+#endif
+#ifdef BUILD_GIT_COMMIT
+    if (BUILD_GIT_COMMIT[0] != '\0') return BUILD_GIT_COMMIT;
+#endif
+    return std::string("v") + FormatVersion(CLIENT_VERSION);
 }
 
 /**

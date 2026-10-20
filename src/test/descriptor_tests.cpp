@@ -385,13 +385,16 @@ void DoCheck(std::string prv, std::string pub, const std::string& norm_pub, int 
 
                 /* Infer a descriptor from the generated script, and verify its solvability and that it roundtrips. */
                 auto inferred = InferDescriptor(spks[n], script_provider);
+                BOOST_REQUIRE_MESSAGE(inferred, "InferDescriptor returned null for " + prv);
                 BOOST_CHECK_EQUAL(inferred->IsSolvable(), !(flags & UNSOLVABLE));
                 std::vector<CScript> spks_inferred;
                 FlatSigningProvider provider_inferred;
                 BOOST_CHECK(inferred->Expand(0, provider_inferred, spks_inferred, provider_inferred));
                 BOOST_CHECK_EQUAL(spks_inferred.size(), 1U);
                 BOOST_CHECK(spks_inferred[0] == spks[n]);
-                BOOST_CHECK_EQUAL(InferDescriptor(spks_inferred[0], provider_inferred)->IsSolvable(), !(flags & UNSOLVABLE));
+                const auto inferred_roundtrip = InferDescriptor(spks_inferred[0], provider_inferred);
+                BOOST_REQUIRE_MESSAGE(inferred_roundtrip, "InferDescriptor roundtrip returned null for " + prv);
+                BOOST_CHECK_EQUAL(inferred_roundtrip->IsSolvable(), !(flags & UNSOLVABLE));
                 BOOST_CHECK(GetKeyOriginData(provider_inferred, flags) == GetKeyOriginData(script_provider, flags));
             }
 

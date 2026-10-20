@@ -18,7 +18,7 @@ BOOST_FIXTURE_TEST_SUITE(spend_tests, WalletTestingSetup)
 
 BOOST_FIXTURE_TEST_CASE(SubtractFee, TestChain100Setup)
 {
-    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    CreateAndProcessBlock({}, m_coinbase_script);
     auto wallet = CreateSyncedWallet(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
 
     // Check that a subtract-from-recipient transaction slightly less than the
@@ -66,7 +66,7 @@ BOOST_FIXTURE_TEST_CASE(wallet_duplicated_preset_inputs_test, TestChain100Setup)
     // Verify that the wallet's Coin Selection process does not include pre-selected inputs twice in a transaction.
 
     // Add 4 spendable UTXO, 50 BTC each, to the wallet (total balance 200 BTC)
-    for (int i = 0; i < 4; i++) CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    for (int i = 0; i < 4; i++) CreateAndProcessBlock({}, m_coinbase_script);
     auto wallet = CreateSyncedWallet(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
 
     LOCK(wallet->cs_wallet);

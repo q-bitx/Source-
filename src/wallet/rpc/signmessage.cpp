@@ -50,6 +50,14 @@ RPCHelpMan signmessage()
                 throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address");
             }
 
+            if (std::holds_alternative<DilithiumPKHash>(dest) ||
+                std::holds_alternative<DilithiumPubKeyDestination>(dest) ||
+                std::holds_alternative<DilithiumScriptHash>(dest) ||
+                std::holds_alternative<DilithiumWitnessV0KeyHash>(dest) ||
+                std::holds_alternative<DilithiumWitnessV0ScriptHash>(dest)) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Dilithium message signing is not supported");
+            }
+
             const PKHash* pkhash = std::get_if<PKHash>(&dest);
             if (!pkhash) {
                 throw JSONRPCError(RPC_TYPE_ERROR, "Address does not refer to key");

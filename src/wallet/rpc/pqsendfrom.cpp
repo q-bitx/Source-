@@ -26,6 +26,8 @@
 #include <univalue.h>
 #include <util/moneystr.h>
 #include <util/strencodings.h>
+#include <wallet/pq_sign.h>
+#include <wallet/pq_spend_weight.h>
 #include <wallet/rpc/util.h>
 #include <wallet/wallet.h>
 
@@ -99,54 +101,29 @@ static CFeeRate GetFeeRate(const std::string& fee_policy)
     return CFeeRate(sat_per_kvb);
 }
 
-// Calculate deterministic vsize for PQ P2PKH transaction without dummy signatures
-// Uses fixed Dilithium3 sizes: signature ~2420 bytes, pubkey ~1952 bytes
-static int64_t CalculatePQTxVsize(size_t num_inputs, size_t num_outputs)
+// Floor policy feerate at relay/mempool minimums so "low" remains relayable.
+static CFeeRate ApplyRelayFloor(interfaces::Chain& chain, CFeeRate feerate)
 {
-    // Base transaction overhead
-    int64_t base_size = 10; // version(4) + locktime(4) + vin_count(1-9) + vout_count(1-9) varints
-    if (num_inputs > 9) base_size += 1; // larger varint
-    if (num_outputs > 9) base_size += 1;
-    
-    // Each input: prevout(36) + sequence(4) + scriptsig_size_varint + scriptsig
-    // PQ P2PKH scriptsig: <sig_with_hashtype> <pubkey>
-    // sig_with_hashtype: DILITHIUM_SIGNATUREBYTES + 1 byte hashtype
-    // pubkey: DILITHIUM_PUBLICKEYBYTES
-    const int64_t sig_size = DILITHIUM_SIGNATUREBYTES + 1; // signature + hashtype
-    const int64_t pubkey_size = DILITHIUM_PUBLICKEYBYTES;
-    
-    // Pushdata overhead: if size > 75, need 1 extra byte; if > 255, need 2 extra bytes
-    // Dilithium sizes are large, so we'll need PUSHDATA2 (3 bytes overhead each)
-    const int64_t sig_push_overhead = 3; // PUSHDATA2 prefix for large push
-    const int64_t pubkey_push_overhead = 3;
-    const int64_t scriptsig_size = sig_push_overhead + sig_size + pubkey_push_overhead + pubkey_size;
-    const int64_t scriptsig_size_varint = GetSizeOfCompactSize(scriptsig_size);
-    
-    // Per input: prevout(36) + sequence(4) + scriptsig_varint + scriptsig
-    const int64_t input_size = 36 + 4 + scriptsig_size_varint + scriptsig_size;
-    
-    // Each output: value(8) + scriptPubKey_size_varint + scriptPubKey
-    // PQ P2PKH scriptPubKey: OP_DUP OP_HASH160 <20> <hash20> OP_EQUALVERIFY OP_CHECKSIGDILITHIUM
-    const int64_t p2pkh_output_size = 8 + 1 + 25; // value(8) + varint(1) + 25-byte script
-    
-    // Total size in bytes (non-segwit, no witness discount)
-    int64_t total_size = base_size + (num_inputs * input_size) + (num_outputs * p2pkh_output_size);
-    
-    // Convert to vsize (for non-segwit, vsize = size)
-    return total_size;
+    const CFeeRate floor = std::max(chain.relayMinFee(), chain.mempoolMinFee());
+    if (feerate < floor) {
+        return floor;
+    }
+    return feerate;
 }
 
 RPCHelpMan pqsendfrom()
 {
     return RPCHelpMan{"pqsendfrom",
         "\nSend PQ (Dilithium) coins from a wallet address to another PQ address.\n"
-        "This command is for regression testing (-regtest mode) only.\n"
+        "Optional mode 'prepare' builds and signs a transaction without broadcasting.\n"
+        "Default mode 'broadcast' preserves historical create+sign+broadcast behavior.\n"
         "The from_address must belong to the selected wallet.\n",
         {
             {"from_address", RPCArg::Type::STR, RPCArg::Optional::NO, "Source PQ/Dilithium address (must belong to this wallet)"},
             {"to_address", RPCArg::Type::STR, RPCArg::Optional::NO, "Destination PQ/Dilithium address"},
             {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "Amount to send (in QBX)"},
-            {"fee_policy", RPCArg::Type::STR, RPCArg::Default{"normal"}, "Fee policy: 'low' (1 sat/vB), 'normal' (5 sat/vB), or 'high' (15 sat/vB)"},
+            {"fee_policy", RPCArg::Type::STR, RPCArg::Default{"normal"}, "Fee policy: 'low' (1 sat/vB floored by relay/mempool min), 'normal' (5 sat/vB), or 'high' (15 sat/vB)"},
+            {"mode", RPCArg::Type::STR, RPCArg::Default{"broadcast"}, "Transaction mode: 'broadcast' (default, historical behavior) or 'prepare' (sign only, no network send)"},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -156,13 +133,37 @@ RPCHelpMan pqsendfrom()
                 {RPCResult::Type::NUM, "amount", "Amount sent"},
                 {RPCResult::Type::NUM, "fee", "Transaction fee"},
                 {RPCResult::Type::NUM, "change", "Change amount returned to sender"},
+                {RPCResult::Type::STR, "mode", "Mode used: prepare or broadcast"},
+                {RPCResult::Type::STR, "destination", "Destination address"},
+                {RPCResult::Type::NUM, "weight", "Signed transaction weight"},
+                {RPCResult::Type::NUM, "vsize", "Signed transaction virtual size"},
+                {RPCResult::Type::ARR, "inputs", "Selected inputs",
+                    {
+                        {RPCResult::Type::OBJ, "", "",
+                            {
+                                {RPCResult::Type::STR_HEX, "txid", "Previous output txid"},
+                                {RPCResult::Type::NUM, "vout", "Previous output index"},
+                                {RPCResult::Type::NUM, "amount", "Input value"},
+                            }},
+                    }},
+                {RPCResult::Type::ARR, "outputs", "Transaction outputs",
+                    {
+                        {RPCResult::Type::OBJ, "", "",
+                            {
+                                {RPCResult::Type::STR, "address", "Output address when decodable"},
+                                {RPCResult::Type::NUM, "amount", "Output value"},
+                            }},
+                    }},
+                {RPCResult::Type::BOOL, "broadcast", "True when the transaction was relayed"},
             }
         },
         RPCExamples{
             "\nSend 1.0 QBX from one PQ address to another\n"
             + HelpExampleCli("pqsendfrom", "\"<from_address>\" \"<to_address>\" 1.0") +
             "\nSend with explicit fee policy\n"
-            + HelpExampleCli("pqsendfrom", "\"<from_address>\" \"<to_address>\" 5.0 \"normal\"")
+            + HelpExampleCli("pqsendfrom", "\"<from_address>\" \"<to_address>\" 5.0 \"normal\"") +
+            "\nPrepare a signed transaction without broadcasting\n"
+            + HelpExampleCli("pqsendfrom", "\"<from_address>\" \"<to_address>\" 1.0 \"low\" \"prepare\"")
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
     {
@@ -311,56 +312,50 @@ RPCHelpMan pqsendfrom()
         if (request.params.size() > 3 && !request.params[3].isNull()) {
             feePolicy = request.params[3].get_str();
         }
-        CFeeRate feerate = GetFeeRate(feePolicy);
+        CFeeRate feerate = ApplyRelayFloor(wallet->chain(), GetFeeRate(feePolicy));
+
+        // Optional mode: default "broadcast" keeps historical behavior.
+        std::string mode = "broadcast";
+        if (request.params.size() > 4 && !request.params[4].isNull()) {
+            mode = request.params[4].get_str();
+        }
+        if (mode != "broadcast" && mode != "prepare") {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "mode must be 'broadcast' or 'prepare'");
+        }
+        const bool prepare_only = (mode == "prepare");
+
+        const int witness_scale = GetWitnessDiscountScale(consensusEarly, next_height_early);
+        const bool legacy_scriptsig = !IsNativePQWitnessProgram(fromScriptPubKey);
+        const std::vector<CScript> output_scripts{outputScriptPubKey, changeScriptPubKey};
 
         if (!pq_witness_active && (std::holds_alternative<DilithiumWitnessV0KeyHash>(toDest) || std::holds_alternative<DilithiumWitnessV0ScriptHash>(toDest))) {
             throw JSONRPCError(RPC_INVALID_REQUEST,
                 strprintf("PQ witness is not active until height %d", consensusEarly.nPQWitnessHeight));
         }
 
-        // Find UTXOs for the from_address scriptPubKey using wallet's listunspent-like functionality
-        // For MVP, we'll use a simple approach: iterate wallet transactions and filter for PQ outputs
+        // Confirmed outputs only. Abandoned and conflicted spends do not
+        // consume the outpoint; CWallet::IsSpent is the same check listunspent uses.
         std::vector<std::pair<COutPoint, CAmount>> availableUTXOs;
-        
+        std::set<COutPoint> seen_outpoints;
+
         for (const auto& [txid, wtx] : wallet->mapWallet) {
             int depth = wallet->GetTxDepthInMainChain(wtx);
-            if (depth < 0) continue; // Not in chain
-            
+            if (depth < 1) continue;
+
             const CTransaction& tx = *wtx.tx;
-            
+
             for (uint32_t i = 0; i < tx.vout.size(); ++i) {
                 const CTxOut& out = tx.vout[i];
-                
-                // Check if this output matches our scriptPubKey
                 if (out.scriptPubKey != fromScriptPubKey) continue;
-                
-                // Check if it's a PQ script
                 if (!IsPQScript(out.scriptPubKey)) continue;
-                
-                // Skip immature coinbase outputs (depth = confirmations from GetTxDepthInMainChain)
-                if (wtx.IsCoinBase() && depth < COINBASE_MATURITY) {
-                    continue; // Not matured
-                }
-                
-                // Check if already spent (simple check: look for spends in wallet)
-                // Use wtx.GetHash() to get Txid for COutPoint construction
-                Txid wtxTxid = wtx.GetHash();
-                COutPoint outpoint(wtxTxid, i);
-                bool isSpent = false;
-                for (const auto& [spendTxid, spendWtx] : wallet->mapWallet) {
-                    const CTransaction& spendTx = *spendWtx.tx;
-                    for (const auto& vin : spendTx.vin) {
-                        if (vin.prevout == outpoint) {
-                            isSpent = true;
-                            break;
-                        }
-                    }
-                    if (isSpent) break;
-                }
-                
-                if (!isSpent) {
-                    availableUTXOs.emplace_back(outpoint, out.nValue);
-                }
+                if (wtx.IsCoinBase() && depth < COINBASE_MATURITY) continue;
+
+                COutPoint outpoint(wtx.GetHash(), i);
+                if (!seen_outpoints.insert(outpoint).second) continue;
+                if (wallet->IsSpent(outpoint)) continue;
+                // Skip coins locked by prepare-mode reservation or lockunspent.
+                if (wallet->IsLockedCoin(outpoint)) continue;
+                availableUTXOs.emplace_back(outpoint, out.nValue);
             }
         }
 
@@ -369,47 +364,50 @@ RPCHelpMan pqsendfrom()
                 "No mature coins available. Coinbase outputs require 100 confirmations.");
         }
 
-        // Simple UTXO selection: pick first one if sufficient, otherwise accumulate
+        std::sort(availableUTXOs.begin(), availableUTXOs.end(),
+            [](const std::pair<COutPoint, CAmount>& a, const std::pair<COutPoint, CAmount>& b) {
+                return a.second > b.second;
+            });
+
         std::vector<std::pair<COutPoint, CAmount>> selectedUTXOs;
+        std::set<COutPoint> used_outpoints;
         CAmount totalInputAmount = 0;
-        
-        // Estimate initial fee using deterministic vsize calculation (1 input, 2 outputs: amount + change)
-        int64_t estimatedVsize = CalculatePQTxVsize(1, 2);
-        CAmount estimatedFee = feerate.GetFee(static_cast<uint32_t>(estimatedVsize));
-        CAmount requiredAmount = amount + estimatedFee;
-        
-        for (const auto& [outpoint, value] : availableUTXOs) {
-            selectedUTXOs.emplace_back(outpoint, value);
-            totalInputAmount += value;
-            
-            // Stop if we have enough (simple policy: use first if sufficient)
-            if (totalInputAmount >= requiredAmount) {
+
+        for (const auto& utxo : availableUTXOs) {
+            if (used_outpoints.count(utxo.first)) continue;
+            if (PqSpendExceedsStandardWeight(selectedUTXOs.size() + 1, legacy_scriptsig, witness_scale, output_scripts)) {
                 break;
             }
+            selectedUTXOs.push_back(utxo);
+            used_outpoints.insert(utxo.first);
+            totalInputAmount += utxo.second;
+            const PqSpendWeight priced{EstimatePqSpendWeight(selectedUTXOs.size(), legacy_scriptsig, witness_scale, output_scripts)};
+            if (totalInputAmount >= amount + feerate.GetFee(static_cast<uint32_t>(priced.vsize))) break;
         }
 
-        // Recalculate fee with actual number of inputs
-        int64_t numOutputs = 1; // at least the destination output
-        CAmount change = totalInputAmount - amount;
-        if (change > 0) {
-            numOutputs = 2; // destination + change
+        if (selectedUTXOs.empty()) {
+            throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS,
+                "No confirmed input fits the standard transaction weight limit.");
         }
-        int64_t vsize = CalculatePQTxVsize(selectedUTXOs.size(), numOutputs);
-        CAmount fee = feerate.GetFee(static_cast<uint32_t>(vsize));
-        
-        // Recalculate change with actual fee
-        change = totalInputAmount - amount - fee;
-        
-        // Check if change is dust
-        CFeeRate dustRelayFee = wallet->chain().relayDustFee();
-        bool changeIsDust = false;
-        if (change > 0) {
-            CTxOut changeOutput(change, changeScriptPubKey);
-            changeIsDust = IsDust(changeOutput, dustRelayFee);
-        }
-        
-        // If insufficient funds or change is dust
+
+        const std::vector<CScript> destination_only{outputScriptPubKey};
+        const PqSpendWeight priced_two{EstimatePqSpendWeight(selectedUTXOs.size(), legacy_scriptsig, witness_scale, output_scripts)};
+        CAmount fee = feerate.GetFee(static_cast<uint32_t>(priced_two.vsize));
+        CAmount change = totalInputAmount - amount - fee;
+
         if (totalInputAmount < amount + fee) {
+            const PqSpendWeight priced_one{EstimatePqSpendWeight(selectedUTXOs.size(), legacy_scriptsig, witness_scale, destination_only)};
+            fee = feerate.GetFee(static_cast<uint32_t>(priced_one.vsize));
+            change = 0;
+        }
+
+        CFeeRate dustRelayFee = wallet->chain().relayDustFee();
+        if (change > 0 && IsDust(CTxOut(change, changeScriptPubKey), dustRelayFee)) {
+            change = 0;
+            fee = totalInputAmount - amount;
+        }
+
+        if (change < 0 || totalInputAmount < amount + fee) {
             throw JSONRPCError(RPC_INVALID_PARAMETER,
                 strprintf("Insufficient funds: available %s, required %s (amount %s + fee %s). "
                          "Note: Immature coinbase transactions are not spendable until they have %d confirmations. "
@@ -419,10 +417,6 @@ RPCHelpMan pqsendfrom()
                     FormatMoney(amount),
                     FormatMoney(fee),
                     COINBASE_MATURITY));
-        }
-        
-        if (changeIsDust) {
-            change = 0; // Don't include dust change
         }
 
         // Build transaction
@@ -439,53 +433,95 @@ RPCHelpMan pqsendfrom()
             mtx.vout.emplace_back(change, changeScriptPubKey);
         }
 
-        // Sign transaction using PQ signing
-        CTransaction tx(mtx);
-        int32_t nHashType = SIGHASH_ALL;
-        const bool from_is_native_pq_witness = IsNativePQWitnessProgram(fromScriptPubKey);
-        CScript witness_script;
-        if (from_is_native_pq_witness) {
-            const std::vector<unsigned char> program(fromScriptPubKey.begin() + 2, fromScriptPubKey.end());
-            witness_script << OP_DUP << OP_HASH160 << program << OP_EQUALVERIFY << OP_CHECKSIG;
+        std::map<COutPoint, Coin> pq_coins;
+        for (const auto& [outpoint, value] : selectedUTXOs) {
+            pq_coins.emplace(outpoint, Coin(CTxOut(value, fromScriptPubKey), 1, false));
         }
-        for (size_t i = 0; i < mtx.vin.size(); ++i) {
-            const CAmount input_amount = selectedUTXOs[i].second;
-            const uint256 sighash = from_is_native_pq_witness
-                ? SignatureHash(witness_script, tx, i, nHashType, input_amount, SigVersion::WITNESS_V0, nullptr)
-                : SignatureHash(fromScriptPubKey, tx, i, nHashType, 0, SigVersion::BASE, nullptr);
-
-            std::vector<unsigned char> msgHash(sighash.begin(), sighash.end());
-            std::vector<unsigned char> signature;
-            if (!PQ_Sign(signature, msgHash, privkeyBytes)) {
-                throw JSONRPCError(RPC_WALLET_ERROR, "Failed to sign Dilithium transaction");
-            }
-
-            std::vector<unsigned char> sigWithHashtype = signature;
-            sigWithHashtype.push_back(static_cast<unsigned char>(nHashType));
-            if (from_is_native_pq_witness) {
-                mtx.vin[i].scriptSig = CScript{};
-                mtx.vin[i].scriptWitness.stack.clear();
-                mtx.vin[i].scriptWitness.stack.push_back(sigWithHashtype);
-                mtx.vin[i].scriptWitness.stack.push_back(pubkeyBytes);
-            } else {
-                CScript scriptSig;
-                scriptSig << sigWithHashtype << pubkeyBytes;
-                mtx.vin[i].scriptSig = scriptSig;
-                mtx.vin[i].scriptWitness.stack.clear();
-            }
+        bilingual_str pq_error;
+        if (!SignPqWalletInputs(*wallet, mtx, pq_coins, pq_error)) {
+            throw JSONRPCError(RPC_WALLET_ERROR, pq_error.original);
         }
 
-        // Broadcast transaction using wallet's chain interface (not NodeContext)
+        std::vector<CScript> signed_outputs{outputScriptPubKey};
+        if (change > 0) signed_outputs.push_back(changeScriptPubKey);
+        const PqSpendWeight estimated{EstimatePqSpendWeight(selectedUTXOs.size(), legacy_scriptsig, witness_scale, signed_outputs)};
+        const PqSpendWeight actual{MeasurePqSpendWeight(CTransaction{mtx}, witness_scale)};
+        if (actual.weight != estimated.weight || actual.vsize != estimated.vsize || actual.weight > MAX_STANDARD_TX_WEIGHT) {
+            throw JSONRPCError(RPC_WALLET_ERROR, strprintf(
+                "Signed PQ transaction weight %d (vsize %d) does not match estimate %d (vsize %d) at scale %d",
+                actual.weight, actual.vsize, estimated.weight, estimated.vsize, witness_scale));
+        }
+
         CTransaction final_tx(mtx);
         Txid txid = final_tx.GetHash();
         std::string rawtxHex = EncodeHexTx(final_tx);
-        
+
+        UniValue inputs_arr(UniValue::VARR);
+        for (const auto& [outpoint, value] : selectedUTXOs) {
+            UniValue in(UniValue::VOBJ);
+            in.pushKV("txid", outpoint.hash.GetHex());
+            in.pushKV("vout", static_cast<int64_t>(outpoint.n));
+            in.pushKV("amount", ValueFromAmount(value));
+            inputs_arr.push_back(in);
+        }
+
+        UniValue outputs_arr(UniValue::VARR);
+        {
+            UniValue dest_out(UniValue::VOBJ);
+            dest_out.pushKV("address", toAddress);
+            dest_out.pushKV("amount", ValueFromAmount(amount));
+            outputs_arr.push_back(dest_out);
+            if (change > 0) {
+                UniValue ch(UniValue::VOBJ);
+                CTxDestination change_dest;
+                if (ExtractDestination(changeScriptPubKey, change_dest)) {
+                    ch.pushKV("address", EncodeDestination(change_dest));
+                } else {
+                    ch.pushKV("address", "");
+                }
+                ch.pushKV("amount", ValueFromAmount(change));
+                outputs_arr.push_back(ch);
+            }
+        }
+
+        if (prepare_only) {
+            // Persist input locks so a restart cannot re-select the same UTXOs
+            // for a second prepare of a different payout. Caller broadcasts via
+            // sendrawtransaction after durable ledger commit.
+            std::unique_ptr<WalletBatch> batch = std::make_unique<WalletBatch>(wallet->GetDatabase());
+            for (const auto& [outpoint, value] : selectedUTXOs) {
+                if (!wallet->LockCoin(outpoint, batch.get())) {
+                    throw JSONRPCError(RPC_WALLET_ERROR, strprintf(
+                        "Failed to lock prepared input %s:%u", outpoint.hash.GetHex(), outpoint.n));
+                }
+            }
+
+            UniValue ret(UniValue::VOBJ);
+            ret.pushKV("txid", txid.GetHex());
+            ret.pushKV("rawtx", rawtxHex);
+            ret.pushKV("amount", ValueFromAmount(amount));
+            ret.pushKV("fee", ValueFromAmount(fee));
+            if (change > 0) {
+                ret.pushKV("change", ValueFromAmount(change));
+            }
+            ret.pushKV("mode", "prepare");
+            ret.pushKV("destination", toAddress);
+            ret.pushKV("weight", actual.weight);
+            ret.pushKV("vsize", actual.vsize);
+            ret.pushKV("inputs", inputs_arr);
+            ret.pushKV("outputs", outputs_arr);
+            ret.pushKV("broadcast", false);
+            return ret;
+        }
+
+        // Historical path: sign+broadcast atomically.
         std::string err_string;
-        const CAmount max_tx_fee = MAX_MONEY; // Accept any fee for regtest
+        const CAmount max_tx_fee = MAX_MONEY; // Accept any fee for regtest / operator policy
         bool broadcast_ok = wallet->chain().broadcastTransaction(MakeTransactionRef(final_tx), max_tx_fee, /*relay=*/true, err_string);
         if (!broadcast_ok) {
             throw JSONRPCError(RPC_WALLET_ERROR, strprintf("Failed to broadcast transaction: %s", err_string));
         }
+        wallet->AddToWallet(MakeTransactionRef(final_tx), TxStateInMempool{});
 
         UniValue ret(UniValue::VOBJ);
         ret.pushKV("txid", txid.GetHex());
@@ -495,7 +531,13 @@ RPCHelpMan pqsendfrom()
         if (change > 0) {
             ret.pushKV("change", ValueFromAmount(change));
         }
-        
+        ret.pushKV("mode", "broadcast");
+        ret.pushKV("destination", toAddress);
+        ret.pushKV("weight", actual.weight);
+        ret.pushKV("vsize", actual.vsize);
+        ret.pushKV("inputs", inputs_arr);
+        ret.pushKV("outputs", outputs_arr);
+        ret.pushKV("broadcast", true);
         return ret;
     },
     };

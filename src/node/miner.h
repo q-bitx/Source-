@@ -34,6 +34,33 @@ namespace Consensus { struct Params; };
 namespace node {
 static const bool DEFAULT_PRINT_MODIFIED_FEE = false;
 
+/**
+ * Consensus maximum coinbase scriptSig length (CheckTransaction, bad-cb-length).
+ * Lengths 2..100 all use a 1-byte CompactSize; 100 is below the 253-byte step.
+ */
+static constexpr unsigned int MAX_COINBASE_SCRIPTSIG_SIZE{100};
+
+/**
+ * Extra TX_WITH_WITNESS bytes reserved for pool-created coinbase outputs.
+ *
+ * getblocktemplate does not return coinbasetxn. The client builds the coinbase
+ * from coinbasevalue, an empty coinbaseaux, and default_witness_commitment.
+ * Consensus bounds that coinbase as follows:
+ * - scriptSig is 2..100 bytes, and must start with the BIP34 height push;
+ * - vout[0] is exactly a PQ P2PKH script (CheckBlock, bad-cb-pq);
+ * - with segwit active, the witness stack is one 32-byte nonce
+ *   (CheckWitnessMalleation, bad-witness-nonce-size);
+ * - GenerateCoinbaseCommitment always appends one 38-byte commitment output.
+ *
+ * Further outputs are limited only by the block caps, so they have no exact
+ * maximum. This margin is the allowance for those outputs, including any
+ * vout-count CompactSize growth. Package selection leaves this many physical
+ * bytes free under the active serialized-size cap, on top of the max-scriptSig
+ * coinbase described above. A coinbase that grows by more than this is outside
+ * the template contract.
+ */
+static constexpr uint64_t GBT_POOL_COINBASE_EXTRA_OUTPUT_BYTES{2048};
+
 struct CBlockTemplate
 {
     CBlock block;
@@ -152,6 +179,13 @@ private:
     uint64_t nBlockWeight;
     uint64_t nBlockTx;
     uint64_t nBlockSigOpsCost;
+    /** Serialized bytes of mempool transactions already added. Excludes the header, tx-count, and coinbase. */
+    uint64_t nBlockSerializedTxBytes{0};
+    /**
+     * Upper bound on a GBT client's coinbase TX_WITH_WITNESS size.
+     * See GBT_POOL_COINBASE_EXTRA_OUTPUT_BYTES.
+     */
+    uint64_t m_coinbase_serialized_reserve{0};
     CAmount nFees;
     std::unordered_set<Txid, SaltedTxidHasher> inBlock;
 
@@ -204,8 +238,15 @@ private:
     // helper functions for addPackageTxs()
     /** Remove confirmed (inBlock) entries from given set */
     void onlyUnconfirmed(CTxMemPool::setEntries& testSet);
-    /** Test if a new package would "fit" in the block */
+    /** Test if a new package would "fit" in the block by weight and sigops. packageSize is vsize, not bytes. */
     bool TestPackage(uint64_t packageSize, int64_t packageSigOpsCost) const;
+    /**
+     * Test physical serialized size using bytes already accounted plus the
+     * transactions that would be added. Does not serialize the block.
+     */
+    bool TestAddedSerializedSize(uint64_t extra_bytes, uint64_t extra_txs) const;
+    /** Install a non-null coinbase so later block serialization cannot dereference a null tx. */
+    void InstallCoinbasePlaceholder(const CBlockIndex* pindexPrev);
     /** Perform checks on each transaction in a package:
       * locktime, premature-witness, serialized size (if necessary)
       * These checks should always succeed, and they're here

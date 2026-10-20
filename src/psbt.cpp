@@ -378,6 +378,11 @@ bool SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& 
     const CMutableTransaction& tx = *psbt.tx;
 
     if (PSBTInputSignedAndVerified(psbt, index, txdata)) {
+        // The input is already signed, so signing is a no-op, but the caller
+        // still needs the requested Dilithium template flag on its SignatureData.
+        if (out_sigdata) {
+            out_sigdata->pq_witness_program_templates = pq_witness_program_templates;
+        }
         return true;
     }
 
@@ -385,6 +390,13 @@ bool SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& 
     SignatureData sigdata;
     input.FillSignatureData(sigdata);
     sigdata.pq_witness_program_templates = sigdata.pq_witness_program_templates || pq_witness_program_templates;
+    // Callers inspect this flag after a failed sign. Do not drop it on the
+    // UTXO and witness-signature rejection paths below.
+    const auto publish_pq_template_flag = [&]() {
+        if (out_sigdata) {
+            out_sigdata->pq_witness_program_templates = sigdata.pq_witness_program_templates;
+        }
+    };
 
     // Get UTXO
     bool require_witness_sig = false;
@@ -394,9 +406,11 @@ bool SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& 
         // If we're taking our information from a non-witness UTXO, verify that it matches the prevout.
         COutPoint prevout = tx.vin[index].prevout;
         if (prevout.n >= input.non_witness_utxo->vout.size()) {
+            publish_pq_template_flag();
             return false;
         }
         if (input.non_witness_utxo->GetHash() != prevout.hash) {
+            publish_pq_template_flag();
             return false;
         }
         utxo = input.non_witness_utxo->vout[prevout.n];
@@ -408,6 +422,7 @@ bool SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& 
         // a witness signature in this situation.
         require_witness_sig = true;
     } else {
+        publish_pq_template_flag();
         return false;
     }
 
@@ -420,7 +435,10 @@ bool SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& 
         sig_complete = ProduceSignature(provider, creator, utxo.scriptPubKey, sigdata);
     }
     // Verify that a witness signature was produced in case one was required.
-    if (require_witness_sig && !sigdata.witness) return false;
+    if (require_witness_sig && !sigdata.witness) {
+        publish_pq_template_flag();
+        return false;
+    }
 
     // If we are not finalizing, set sigdata.complete to false to not set the scriptWitness
     if (!finalize && sigdata.complete) sigdata.complete = false;

@@ -6,6 +6,7 @@
 #include <chainparams.h>
 #include <consensus/merkle.h>
 #include <pow.h>
+#include <script/script.h>
 #include <streams.h>
 #include <test/util/random.h>
 #include <test/util/txmempool.h>
@@ -17,6 +18,13 @@
 const std::vector<CTransactionRef> empty_extra_txn;
 
 BOOST_FIXTURE_TEST_SUITE(blockencodings_tests, RegTestingSetup)
+
+static CScript PqCoinbaseScript()
+{
+    // CheckBlock accepts only this shape in vout[0] after genesis.
+    const std::vector<unsigned char> payout_id(20, 0x11);
+    return CScript() << OP_DUP << OP_HASH160 << payout_id << OP_EQUALVERIFY << OP_CHECKSIGDILITHIUM;
+}
 
 static CMutableTransaction BuildTransactionTestCase() {
     CMutableTransaction tx;
@@ -32,6 +40,9 @@ static CBlock BuildBlockTestCase(FastRandomContext& ctx) {
     CMutableTransaction tx = BuildTransactionTestCase();
 
     block.vtx.resize(3);
+    // Compact-block reconstruction calls CheckBlock. The round-trip does not
+    // spend this output.
+    tx.vout[0].scriptPubKey = PqCoinbaseScript();
     block.vtx[0] = MakeTransactionRef(tx);
     block.nVersion = 42;
     block.hashPrevBlock = ctx.rand256();
@@ -270,6 +281,7 @@ BOOST_AUTO_TEST_CASE(EmptyBlockRoundTripTest)
 {
     CTxMemPool& pool = *Assert(m_node.mempool);
     CMutableTransaction coinbase = BuildTransactionTestCase();
+    coinbase.vout[0].scriptPubKey = PqCoinbaseScript();
 
     CBlock block;
     auto rand_ctx(FastRandomContext(uint256{42}));

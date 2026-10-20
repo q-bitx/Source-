@@ -67,6 +67,65 @@ configure_file(
   ${CMAKE_BINARY_DIR}/bitcoin-build-config.h
   @ONLY
 )
+
+# Version string for -version. Do not invent a release tag: GIT_TAG is set
+# only when HEAD is exactly the nearest ancestor tag and the tree is clean.
+# A dirty or untagged tree gets <base-tag>-<12-char hash>-dirty in GIT_COMMIT.
+set(GIT_COMMIT "")
+set(GIT_DATE "")
+set(GIT_TAG "")
+find_package(Git QUIET)
+if(GIT_FOUND)
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}" rev-parse --short=12 HEAD
+    OUTPUT_VARIABLE GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE _qbx_rev_rc)
+  if(NOT _qbx_rev_rc EQUAL 0)
+    set(GIT_COMMIT "")
+  endif()
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}" log -1 --format=%cI
+    OUTPUT_VARIABLE GIT_DATE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}" describe --tags --abbrev=0
+    OUTPUT_VARIABLE _qbx_base_tag
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE _qbx_tag_rc)
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}" diff-index --quiet HEAD --
+    RESULT_VARIABLE _qbx_dirty_rc
+    ERROR_QUIET)
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}" rev-parse HEAD
+    OUTPUT_VARIABLE _qbx_head
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+  set(_qbx_tag_commit "")
+  if(_qbx_tag_rc EQUAL 0 AND NOT "${_qbx_base_tag}" STREQUAL "")
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}" rev-list -n 1 "${_qbx_base_tag}"
+      OUTPUT_VARIABLE _qbx_tag_commit
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+  endif()
+  if(_qbx_tag_rc EQUAL 0 AND "${_qbx_head}" STREQUAL "${_qbx_tag_commit}" AND _qbx_dirty_rc EQUAL 0)
+    set(GIT_TAG "${_qbx_base_tag}")
+  elseif(NOT "${GIT_COMMIT}" STREQUAL "")
+    if(_qbx_tag_rc EQUAL 0 AND NOT "${_qbx_base_tag}" STREQUAL "")
+      set(GIT_COMMIT "${_qbx_base_tag}-${GIT_COMMIT}")
+    endif()
+    if(NOT _qbx_dirty_rc EQUAL 0)
+      string(APPEND GIT_COMMIT "-dirty")
+    endif()
+    set(GIT_TAG "")
+  endif()
+endif()
+
 configure_file(
   ${CMAKE_SOURCE_DIR}/src/bitcoin-build-info.h.in
   ${CMAKE_BINARY_DIR}/bitcoin-build-info.h

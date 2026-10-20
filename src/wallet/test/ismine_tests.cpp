@@ -7,10 +7,13 @@
 #include <key.h>
 #include <key_io.h>
 #include <node/context.h>
+#include <script/interpreter.h>
+#include <script/pq_script.h>
 #include <script/script.h>
 #include <script/solver.h>
 #include <script/signingprovider.h>
 #include <test/util/setup_common.h>
+#include <test/util/transaction_utils.h>
 #include <wallet/types.h>
 #include <wallet/wallet.h>
 #include <wallet/test/util.h>
@@ -704,11 +707,60 @@ BOOST_AUTO_TEST_CASE(ismine_standard)
     }
 }
 
+BOOST_AUTO_TEST_CASE(ismine_raw_pubkey_matches_spendable_key)
+{
+    CKey key;
+    key.MakeNewKey(true);
+    const CScript raw = GetScriptForRawPubKey(key.GetPubKey());
+    BOOST_CHECK(raw.back() == OP_CHECKSIG);
+    BOOST_CHECK(raw == GetScriptForDestination(PubKeyDestination(key.GetPubKey())));
+
+    std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
+    CWallet keystore(chain.get(), "", CreateMockableWalletDatabase());
+    keystore.SetupLegacyScriptPubKeyMan();
+    {
+        LOCK(keystore.GetLegacyScriptPubKeyMan()->cs_KeyStore);
+        BOOST_CHECK(keystore.GetLegacyScriptPubKeyMan()->AddKey(key));
+        BOOST_CHECK_EQUAL(keystore.GetLegacyScriptPubKeyMan()->IsMine(raw), ISMINE_SPENDABLE);
+    }
+
+    CMutableTransaction spend;
+    spend.vin.resize(1);
+    spend.vin[0].prevout.hash = Txid::FromUint256(uint256::ONE);
+    spend.vin[0].prevout.n = 0;
+    spend.vout.emplace_back(COIN / 2, raw);
+    FillableSigningProvider provider;
+    BOOST_CHECK(provider.AddKey(key));
+    SignatureData sigdata;
+    BOOST_CHECK(SignSignature(provider, raw, spend, 0, COIN, SIGHASH_ALL, sigdata));
+    ScriptError err{SCRIPT_ERR_OK};
+    BOOST_CHECK(VerifyScript(spend.vin[0].scriptSig, raw, nullptr, SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_STRICTENC,
+                              MutableTransactionSignatureChecker(&spend, 0, COIN, MissingDataBehavior::ASSERT_FAIL), &err));
+
+    // A 33-byte key under OP_PQCHECKSIG is not a Dilithium spend. Do not report it as ours.
+    CScript bogus = CScript() << ToByteVector(key.GetPubKey()) << OP_PQCHECKSIG;
+    {
+        LOCK(keystore.GetLegacyScriptPubKeyMan()->cs_KeyStore);
+        BOOST_CHECK_EQUAL(keystore.GetLegacyScriptPubKeyMan()->IsMine(bogus), ISMINE_NO);
+    }
+
+    valtype dil_pub, dil_priv;
+    BOOST_REQUIRE(PQ_GenerateKeypair(dil_pub, dil_priv));
+    const CScript legacy = CScript() << OP_DUP << OP_HASH160 << ToByteVector(Hash160(dil_pub)) << OP_EQUALVERIFY << OP_CHECKSIGDILITHIUM;
+    BOOST_CHECK(IsPQPayToPubKeyHash(legacy));
+    {
+        LOCK(keystore.GetLegacyScriptPubKeyMan()->cs_KeyStore);
+        BOOST_CHECK_EQUAL(keystore.GetLegacyScriptPubKeyMan()->IsMine(legacy), ISMINE_NO);
+    }
+    const CScript native = GetScriptForDestination(DilithiumWitnessV0KeyHash(DilithiumPKHash(CKeyID(Hash160(dil_pub)))));
+    BOOST_CHECK(native.size() == 22 && native[0] == OP_2);
+}
+
 BOOST_AUTO_TEST_CASE(ismine_native_pq_witness_descriptor_wallet)
 {
     std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
     CWallet wallet(chain.get(), "", CreateMockableWalletDatabase());
-    BOOST_CHECK(wallet.LoadWallet());
+    BOOST_CHECK_EQUAL(wallet.LoadWallet(), DBErrors::LOAD_OK);
 
     valtype pubkey_bytes, privkey_bytes;
     BOOST_REQUIRE(PQ_GenerateKeypair(pubkey_bytes, privkey_bytes));
@@ -719,7 +771,7 @@ BOOST_AUTO_TEST_CASE(ismine_native_pq_witness_descriptor_wallet)
     const CScript witness_spk = GetScriptForDestination(DilithiumWitnessV0KeyHash(pk_hash));
 
     std::vector<std::vector<unsigned char>> sol;
-    BOOST_CHECK_EQUAL(Solver(witness_spk, sol), TxoutType::DILITHIUM_WITNESS_V0_KEYHASH);
+    BOOST_CHECK(Solver(witness_spk, sol) == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH);
 
     DescriptorScriptPubKeyMan* dil_spkm = nullptr;
     {

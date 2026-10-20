@@ -608,6 +608,9 @@ private:
     
     // Dilithium key storage
     DilithiumKeyMap m_map_dilithium_keys GUARDED_BY(cs_desc_man);
+    // Unencrypted descriptor keys store only the secret. The public key is
+    // kept here so SignTransaction can build a FlatSigningProvider.
+    DilithiumKeyMap m_map_dilithium_pubkeys GUARDED_BY(cs_desc_man);
     CryptedDilithiumKeyMap m_map_crypted_dilithium_keys GUARDED_BY(cs_desc_man);
 
     //! keeps track of whether Unlock has run a thorough check before

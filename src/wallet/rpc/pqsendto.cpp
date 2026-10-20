@@ -9,6 +9,7 @@
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/params.h>
+#include <consensus/validation.h>
 #include <core_io.h>
 #include <crypto/dilithium.h>
 #include <crypto/dilithium_key.h>
@@ -26,6 +27,7 @@
 #include <univalue.h>
 #include <util/moneystr.h>
 #include <util/strencodings.h>
+#include <wallet/pq_spend_weight.h>
 #include <wallet/rpc/util.h>
 #include <wallet/wallet.h>
 
@@ -103,41 +105,86 @@ static CFeeRate GetFeeRate(const std::string& fee_policy)
     return CFeeRate(sat_per_kvb);
 }
 
-// Calculate deterministic vsize for PQ P2PKH transaction without dummy signatures
-// Uses fixed Dilithium3 sizes: signature ~2420 bytes, pubkey ~1952 bytes
-static int64_t CalculatePQTxVsize(size_t num_inputs, size_t num_outputs)
+// output_scripts is the planned destination plus change. The 2-output member
+// is what selection and the standard-weight ceiling use. A no-change sweep
+// prices the destination alone. Both paths go through EstimatePqSpendWeight,
+// which builds a signed-size skeleton and calls GetTransactionWeightWithScale.
+static std::vector<CScript> PqDestinationOnly(const std::vector<CScript>& output_scripts)
 {
-    // Base transaction overhead
-    int64_t base_size = 10; // version(4) + locktime(4) + vin_count(1-9) + vout_count(1-9) varints
-    if (num_inputs > 9) base_size += 1; // larger varint
-    if (num_outputs > 9) base_size += 1;
-    
-    // Each input: prevout(36) + sequence(4) + scriptsig_size_varint + scriptsig
-    // PQ P2PKH scriptsig: <sig_with_hashtype> <pubkey>
-    // sig_with_hashtype: DILITHIUM_SIGNATUREBYTES + 1 byte hashtype
-    // pubkey: DILITHIUM_PUBLICKEYBYTES
-    const int64_t sig_size = DILITHIUM_SIGNATUREBYTES + 1; // signature + hashtype
-    const int64_t pubkey_size = DILITHIUM_PUBLICKEYBYTES;
-    
-    // Pushdata overhead: if size > 75, need 1 extra byte; if > 255, need 2 extra bytes
-    // Dilithium sizes are large, so we'll need PUSHDATA2 (3 bytes overhead each)
-    const int64_t sig_push_overhead = 3; // PUSHDATA2 prefix for large push
-    const int64_t pubkey_push_overhead = 3;
-    const int64_t scriptsig_size = sig_push_overhead + sig_size + pubkey_push_overhead + pubkey_size;
-    const int64_t scriptsig_size_varint = GetSizeOfCompactSize(scriptsig_size);
-    
-    // Per input: prevout(36) + sequence(4) + scriptsig_varint + scriptsig
-    const int64_t input_size = 36 + 4 + scriptsig_size_varint + scriptsig_size;
-    
-    // Each output: value(8) + scriptPubKey_size_varint + scriptPubKey
-    // PQ P2PKH scriptPubKey: OP_DUP OP_HASH160 <20> <hash20> OP_EQUALVERIFY OP_CHECKSIGDILITHIUM
-    const int64_t p2pkh_output_size = 8 + 1 + 25; // value(8) + varint(1) + 25-byte script
-    
-    // Total size in bytes (non-segwit, no witness discount)
-    int64_t total_size = base_size + (num_inputs * input_size) + (num_outputs * p2pkh_output_size);
-    
-    // Convert to vsize (for non-segwit, vsize = size)
-    return total_size;
+    if (output_scripts.empty()) return {};
+    return {output_scripts.front()};
+}
+
+// Fewest already-sorted inputs that cover remaining plus the 2-output fee.
+// Stops at MAX_INPUTS_PER_TX, or earlier when another input of this satisfaction
+// type would make the transaction non-standard. Legacy scriptSig and native
+// witness use different skeletons, so the ceiling is not the same input count.
+std::vector<std::pair<COutPoint, CAmount>> SelectMinimumPqInputs(
+    const std::vector<std::pair<COutPoint, CAmount>>& available,
+    const std::set<COutPoint>& used,
+    CAmount remaining,
+    const CFeeRate& feerate,
+    bool legacy_scriptsig,
+    int witness_scale,
+    const std::vector<CScript>& output_scripts)
+{
+    std::vector<std::pair<COutPoint, CAmount>> selected;
+    CAmount total = 0;
+    for (const auto& utxo : available) {
+        if (used.count(utxo.first)) continue;
+        if (PqSpendExceedsStandardWeight(selected.size() + 1, legacy_scriptsig, witness_scale, output_scripts)) {
+            break;
+        }
+        selected.push_back(utxo);
+        total += utxo.second;
+        const PqSpendWeight priced{EstimatePqSpendWeight(selected.size(), legacy_scriptsig, witness_scale, output_scripts)};
+        const CAmount fee2 = feerate.GetFee(static_cast<uint32_t>(priced.vsize));
+        if (total >= remaining + fee2) break;
+        if (selected.size() >= MAX_INPUTS_PER_TX) break;
+    }
+    return selected;
+}
+
+// Fees for the batches this send would actually build, not for every wallet UTXO.
+CAmount EstimateMinimumPqSendFees(
+    const std::vector<std::pair<COutPoint, CAmount>>& available,
+    CAmount amount,
+    const CFeeRate& feerate,
+    bool legacy_scriptsig,
+    int witness_scale,
+    const std::vector<CScript>& output_scripts)
+{
+    std::set<COutPoint> used;
+    CAmount remaining = amount;
+    CAmount total_fees = 0;
+    const std::vector<CScript> destination_only{PqDestinationOnly(output_scripts)};
+    while (remaining > 0) {
+        const auto selected = SelectMinimumPqInputs(available, used, remaining, feerate, legacy_scriptsig, witness_scale, output_scripts);
+        if (selected.empty()) break;
+        CAmount total = 0;
+        for (const auto& utxo : selected) {
+            total += utxo.second;
+        }
+        const PqSpendWeight two{EstimatePqSpendWeight(selected.size(), legacy_scriptsig, witness_scale, output_scripts)};
+        const CAmount fee2 = feerate.GetFee(static_cast<uint32_t>(two.vsize));
+        CAmount sent;
+        CAmount fee;
+        if (total < remaining + fee2) {
+            const PqSpendWeight one{EstimatePqSpendWeight(selected.size(), legacy_scriptsig, witness_scale, destination_only)};
+            fee = feerate.GetFee(static_cast<uint32_t>(one.vsize));
+            sent = total - fee;
+        } else {
+            sent = remaining;
+            fee = fee2;
+        }
+        if (sent <= 0) break;
+        total_fees += fee;
+        remaining -= sent;
+        for (const auto& utxo : selected) {
+            used.insert(utxo.first);
+        }
+    }
+    return total_fees;
 }
 
 // pqsendtoaddress splits large sends into multiple transactions
@@ -147,7 +194,7 @@ RPCHelpMan pqsendtoaddress()
 {
     return RPCHelpMan{"pqsendtoaddress",
         "\nSend PQ (Dilithium) coins from a wallet address to another PQ address.\n"
-        "Splits into multiple transactions when more than 16 inputs are needed (max 16 inputs per tx).\n"
+        "Splits into multiple transactions when more than 16 inputs are needed, or when another legacy input would exceed the standard transaction weight limit.\n"
         "This command is for regression testing (-regtest mode) only.\n"
         "The from_address must belong to the selected wallet.\n",
         {
@@ -174,7 +221,14 @@ RPCHelpMan pqsendtoaddress()
                                 {RPCResult::Type::STR_HEX, "txid", "Transaction ID"},
                                 {RPCResult::Type::NUM, "sent", "Amount sent in this transaction"},
                                 {RPCResult::Type::NUM, "fee", "Fee paid for this transaction"},
-                                {RPCResult::Type::NUM, "inputs_used", "Number of inputs used"}
+                                {RPCResult::Type::NUM, "inputs_used", "Number of inputs used"},
+                                {RPCResult::Type::BOOL, "debug_native_pq_witness", "True when the spent output is a native PQ witness"},
+                                {RPCResult::Type::STR_HEX, "debug_scriptSig_hex", "scriptSig of the first input"},
+                                {RPCResult::Type::NUM, "debug_witness_items", "Witness stack size of the first input"},
+                                {RPCResult::Type::NUM, "debug_witness0_size", "Size of witness item 0"},
+                                {RPCResult::Type::NUM, "debug_witness1_size", "Size of witness item 1"},
+                                {RPCResult::Type::STR_HEX, "debug_txid", "txid"},
+                                {RPCResult::Type::STR_HEX, "debug_wtxid", "wtxid"}
                             }
                         }
                     }
@@ -317,6 +371,8 @@ RPCHelpMan pqsendtoaddress()
             feeLevel = request.params[3].get_str();
         }
         CFeeRate feerate = GetFeeRate(feeLevel);
+        const int witness_scale = GetWitnessDiscountScale(consensus, next_height);
+        const bool legacy_scriptsig = !IsNativePQWitnessProgram(fromScriptPubKey);
 
         // Gather available UTXOs - only confirmed (depth >= 1), unspent
         std::vector<std::pair<COutPoint, CAmount>> availableUTXOs;
@@ -334,18 +390,11 @@ RPCHelpMan pqsendtoaddress()
 
                 Txid wtxTxid = wtx.GetHash();
                 COutPoint outpoint(wtxTxid, i);
-                bool isSpent = false;
-                for (const auto& [spendTxid, spendWtx] : wallet->mapWallet) {
-                    const CTransaction& spendTx = *spendWtx.tx;
-                    for (const auto& vin : spendTx.vin) {
-                        if (vin.prevout == outpoint) {
-                            isSpent = true;
-                            break;
-                        }
-                    }
-                    if (isSpent) break;
-                }
-                if (!isSpent) {
+                // Abandoned, conflicted, and mempool-conflicted spends do not
+                // consume the outpoint. CWallet::IsSpent is the same check
+                // listunspent uses; a raw mapWallet scan treats those spends
+                // as final.
+                if (!wallet->IsSpent(outpoint)) {
                     availableUTXOs.emplace_back(outpoint, out.nValue);
                 }
             }
@@ -370,13 +419,15 @@ RPCHelpMan pqsendtoaddress()
             totalConfirmedFunds += value;
         }
 
-        // Estimate total fees needed (conservative estimate: assume worst case)
-        // Estimate with max inputs per tx and 2 outputs (dest + change)
-        int64_t estimatedVsizePerTx = CalculatePQTxVsize(MAX_INPUTS_PER_TX, 2);
-        CAmount estimatedFeePerTx = feerate.GetFee(static_cast<uint32_t>(estimatedVsizePerTx));
-        // Estimate number of transactions needed (conservative: assume we need all inputs)
-        size_t estimatedTxCount = (availableUTXOs.size() + MAX_INPUTS_PER_TX - 1) / MAX_INPUTS_PER_TX;
-        CAmount estimatedTotalFees = estimatedFeePerTx * estimatedTxCount;
+        // Destination plus change. Selection prices this pair. A no-change sweep
+        // prices the destination alone. Native change is a different script
+        // from a legacy source, so the skeleton must use these exact scripts.
+        const std::vector<CScript> output_scripts{outputScriptPubKey, changeScriptPubKey};
+        const std::vector<CScript> destination_only{PqDestinationOnly(output_scripts)};
+
+        // Fee for the inputs this amount actually requires. A small payment
+        // must not be priced as if every matching UTXO were spent.
+        CAmount estimatedTotalFees = EstimateMinimumPqSendFees(availableUTXOs, amount, feerate, legacy_scriptsig, witness_scale, output_scripts);
 
         if (totalConfirmedFunds < amount + estimatedTotalFees) {
             throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS,
@@ -401,11 +452,9 @@ RPCHelpMan pqsendtoaddress()
             std::vector<std::pair<COutPoint, CAmount>> selectedUTXOs;
             CAmount totalInputAmount = 0;
 
-            for (const auto& [outpoint, value] : availableUTXOs) {
-                if (usedOutpoints.count(outpoint)) continue;
-                selectedUTXOs.emplace_back(outpoint, value);
+            selectedUTXOs = SelectMinimumPqInputs(availableUTXOs, usedOutpoints, remaining, feerate, legacy_scriptsig, witness_scale, output_scripts);
+            for (const auto& [outpoint, value] : selectedUTXOs) {
                 totalInputAmount += value;
-                if (selectedUTXOs.size() >= MAX_INPUTS_PER_TX) break;
             }
 
             if (selectedUTXOs.empty()) {
@@ -414,8 +463,10 @@ RPCHelpMan pqsendtoaddress()
                         FormatMoney(remaining), FormatMoney(totalSent)));
             }
 
-            // Fee for 1 output (dest only) or 2 (dest + change)
-            int64_t vsize1 = CalculatePQTxVsize(selectedUTXOs.size(), 1);
+            // Fee for 1 output (dest only) or 2 (dest + change), from the
+            // signed-size skeleton at the next block's witness scale.
+            const PqSpendWeight priced_one{EstimatePqSpendWeight(selectedUTXOs.size(), legacy_scriptsig, witness_scale, destination_only)};
+            const int64_t vsize1 = priced_one.vsize;
             CAmount fee1 = feerate.GetFee(static_cast<uint32_t>(vsize1));
             CAmount maxSendableNoChange = totalInputAmount - fee1;
 
@@ -431,7 +482,8 @@ RPCHelpMan pqsendtoaddress()
             } else {
                 // Can cover remaining; send remaining and possibly have change
                 sendAmount = remaining;
-                int64_t vsize2 = CalculatePQTxVsize(selectedUTXOs.size(), 2);
+                const PqSpendWeight priced_two{EstimatePqSpendWeight(selectedUTXOs.size(), legacy_scriptsig, witness_scale, output_scripts)};
+                const int64_t vsize2 = priced_two.vsize;
                 fee = feerate.GetFee(static_cast<uint32_t>(vsize2));
                 change = totalInputAmount - sendAmount - fee;
 
@@ -500,6 +552,20 @@ RPCHelpMan pqsendtoaddress()
                 (!mtx.vin.empty() && mtx.vin[0].scriptWitness.stack.size() > 0) ? static_cast<int64_t>(mtx.vin[0].scriptWitness.stack[0].size()) : 0;
             const int64_t debug_witness1_size =
                 (!mtx.vin.empty() && mtx.vin[0].scriptWitness.stack.size() > 1) ? static_cast<int64_t>(mtx.vin[0].scriptWitness.stack[1].size()) : 0;
+            // The signed transaction must match the skeleton. A shorter
+            // signature would overpay; a longer one would underpay and can
+            // also cross MAX_STANDARD_TX_WEIGHT after the selection check.
+            std::vector<CScript> signed_outputs{outputScriptPubKey};
+            if (change > 0) signed_outputs.push_back(changeScriptPubKey);
+            const PqSpendWeight estimated{EstimatePqSpendWeight(selectedUTXOs.size(), legacy_scriptsig, witness_scale, signed_outputs)};
+            const CTransaction preview{mtx};
+            const PqSpendWeight actual{MeasurePqSpendWeight(preview, witness_scale)};
+            if (actual.weight != estimated.weight || actual.vsize != estimated.vsize || actual.weight > MAX_STANDARD_TX_WEIGHT) {
+                throw JSONRPCError(RPC_WALLET_ERROR, strprintf(
+                    "Signed PQ transaction weight %d (vsize %d) does not match estimate %d (vsize %d) at scale %d",
+                    actual.weight, actual.vsize, estimated.weight, estimated.vsize, witness_scale));
+            }
+
             // Broadcast: construct final tx by moving mtx so witness stacks are preserved as-is.
             CTransactionRef final_tx = MakeTransactionRef(std::move(mtx));
             Txid txid = final_tx->GetHash();
@@ -519,6 +585,10 @@ RPCHelpMan pqsendtoaddress()
                     txid.GetHex(),
                     wtxid.GetHex()));
             }
+            // Record the spend before the RPC returns. The mempool callback also
+            // does this, but it cannot take cs_wallet until this call finishes,
+            // so a second pqsendtoaddress would otherwise select the same input.
+            wallet->AddToWallet(final_tx, TxStateInMempool{});
 
             txidsArr.push_back(txid.GetHex());
             totalSent += sendAmount;

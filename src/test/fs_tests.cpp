@@ -18,12 +18,12 @@ BOOST_AUTO_TEST_CASE(fsbridge_pathtostring)
 {
     std::string u8_str = "fs_tests_₿_🏃";
     std::u8string str8{u8"fs_tests_₿_🏃"};
-    BOOST_CHECK_EQUAL(fs::PathToString(fs::PathFromString(u8_str)), u8_str);
-    BOOST_CHECK_EQUAL(fs::u8path(u8_str).utf8string(), u8_str);
-    BOOST_CHECK_EQUAL(fs::path(str8).utf8string(), u8_str);
+    BOOST_CHECK_EQUAL(PathToString(PathFromString(u8_str)), u8_str);
+    BOOST_CHECK_EQUAL(fs::u8path(u8_str).string(), u8_str);
+    BOOST_CHECK_EQUAL(fs::path(str8).string(), u8_str);
     BOOST_CHECK(fs::path(str8).u8string() == str8);
-    BOOST_CHECK_EQUAL(fs::PathFromString(u8_str).utf8string(), u8_str);
-    BOOST_CHECK_EQUAL(fs::PathToString(fs::u8path(u8_str)), u8_str);
+    BOOST_CHECK_EQUAL(PathFromString(u8_str).string(), u8_str);
+    BOOST_CHECK_EQUAL(PathToString(fs::u8path(u8_str)), u8_str);
 #ifndef WIN32
     // On non-windows systems, verify that arbitrary byte strings containing
     // invalid UTF-8 can be round tripped successfully with PathToString and
@@ -33,7 +33,7 @@ BOOST_AUTO_TEST_CASE(fsbridge_pathtostring)
     // test would be undefined.
     std::string invalid_u8_str = "\xf0";
     BOOST_CHECK_EQUAL(invalid_u8_str.size(), 1);
-    BOOST_CHECK_EQUAL(fs::PathToString(fs::PathFromString(invalid_u8_str)), invalid_u8_str);
+    BOOST_CHECK_EQUAL(PathToString(PathFromString(invalid_u8_str)), invalid_u8_str);
 #endif
 }
 
@@ -41,7 +41,7 @@ BOOST_AUTO_TEST_CASE(fsbridge_stem)
 {
     std::string test_filename = "fs_tests_₿_🏃.dat";
     std::string expected_stem = "fs_tests_₿_🏃";
-    BOOST_CHECK_EQUAL(fs::PathToString(fs::PathFromString(test_filename).stem()), expected_stem);
+    BOOST_CHECK_EQUAL(PathToString(PathFromString(test_filename).stem()), expected_stem);
 }
 
 BOOST_AUTO_TEST_CASE(fsbridge_fstream)

@@ -168,8 +168,11 @@ bool DumpMempool(const CTxMemPool& pool, const fs::path& dump_path, FopenFn mock
 
     auto mid = SteadyClock::now();
 
-   // AutoFile file{mockable_fopen_function(dump_path + ".new", "wb")};
-    AutoFile file{mockable_fopen_function((dump_path / ".new").string().c_str(), "wb")};
+    // MempoolPath() is the file mempool.dat. operator/ would open
+    // mempool.dat/.new and the dump would fail before any bytes were written.
+    fs::path new_path = dump_path;
+    new_path += ".new";
+    AutoFile file{mockable_fopen_function(new_path.string().c_str(), "wb")};
     if (file.IsNull()) {
         return false;
     }
@@ -203,8 +206,7 @@ bool DumpMempool(const CTxMemPool& pool, const fs::path& dump_path, FopenFn mock
         if (!skip_file_commit && !file.Commit())
             throw std::runtime_error("Commit failed");
         file.fclose();
-	if (!RenameOver(dump_path / ".new", dump_path)) {
-     // if (!RenameOver(dump_path + ".new", dump_path)) {
+        if (!RenameOver(new_path, dump_path)) {
             throw std::runtime_error("Rename failed");
         }
         auto last = SteadyClock::now();

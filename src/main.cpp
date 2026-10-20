@@ -79,7 +79,7 @@ static bool Daemonize(bilingual_str& err)
         exit(EXIT_FAILURE); // Can't return to parent, so exit
     }
 
-    // Second fork to ensure we're not a session leader
+    // Second fork to ensure we're not a session leade
     pid = fork();
     if (pid < 0) {
         exit(EXIT_FAILURE); // Can't return to parent, so exit
@@ -141,7 +141,7 @@ static bool ParseArgs(NodeContext& node, int argc, char* argv[])
 
 static bool ProcessInitCommands(ArgsManager& args)
 {
-    // Process help and version before taking care about datadir
+    // Process help and version before taking care about datadi
     if (HelpRequested(args) || args.GetBoolArg("-version", false)) {
         //std::string strUsage = CLIENT_NAME " daemon version " + FormatFullVersion() + "\n";
         std::string strUsage = CLIENT_NAME + std::string(" daemon version ") + FormatFullVersion() + "\n";
@@ -261,7 +261,6 @@ MAIN_FUNCTION
 #endif
 
     SetupEnvironment();
-    ECC_Start();
 
     NodeContext node;
     noui_connect();

@@ -6,6 +6,7 @@
 
 #include <future>
 #include <memory>
+#include <set>
 #include <stdint.h>
 #include <vector>
 
@@ -14,7 +15,10 @@
 #include <key_io.h>
 #include <outputtype.h>
 #include <node/blockstorage.h>
+#include <consensus/consensus.h>
+#include <policy/feerate.h>
 #include <policy/policy.h>
+#include <wallet/pq_spend_weight.h>
 #include <rpc/server.h>
 #include <script/solver.h>
 #include <test/util/logging.h>
@@ -44,6 +48,22 @@ RPCHelpMan importwallet();
 // as the default levels for node policy.
 static_assert(DEFAULT_TRANSACTION_MINFEE >= DEFAULT_MIN_RELAY_TX_FEE, "wallet minimum fee is smaller than default relay fee");
 static_assert(WALLET_INCREMENTAL_RELAY_FEE >= DEFAULT_INCREMENTAL_RELAY_FEE, "wallet incremental fee is smaller than default incremental relay fee");
+
+std::vector<std::pair<COutPoint, CAmount>> SelectMinimumPqInputs(
+    const std::vector<std::pair<COutPoint, CAmount>>& available,
+    const std::set<COutPoint>& used,
+    CAmount remaining,
+    const CFeeRate& feerate,
+    bool legacy_scriptsig,
+    int witness_scale,
+    const std::vector<CScript>& output_scripts);
+CAmount EstimateMinimumPqSendFees(
+    const std::vector<std::pair<COutPoint, CAmount>>& available,
+    CAmount amount,
+    const CFeeRate& feerate,
+    bool legacy_scriptsig,
+    int witness_scale,
+    const std::vector<CScript>& output_scripts);
 
 BOOST_FIXTURE_TEST_SUITE(wallet_tests, WalletTestingSetup)
 
@@ -78,7 +98,7 @@ BOOST_FIXTURE_TEST_CASE(scan_for_wallet_transactions, TestChain100Setup)
     // Cap last block file size, and mine new block in a new block file.
     CBlockIndex* oldTip = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip());
     WITH_LOCK(::cs_main, m_node.chainman->m_blockman.GetBlockFileInfo(oldTip->GetBlockPos().nFile)->nSize = MAX_BLOCKFILE_SIZE);
-    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    CreateAndProcessBlock({}, m_coinbase_script);
     CBlockIndex* newTip = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip());
 
     // Verify ScanForWalletTransactions fails to read an unknown start block.
@@ -201,7 +221,7 @@ BOOST_FIXTURE_TEST_CASE(importmulti_rescan, TestChain100Setup)
     // Cap last block file size, and mine new block in a new block file.
     CBlockIndex* oldTip = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip());
     WITH_LOCK(::cs_main, m_node.chainman->m_blockman.GetBlockFileInfo(oldTip->GetBlockPos().nFile)->nSize = MAX_BLOCKFILE_SIZE);
-    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    CreateAndProcessBlock({}, m_coinbase_script);
     CBlockIndex* newTip = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip());
 
     // Prune the older block file.
@@ -227,7 +247,7 @@ BOOST_FIXTURE_TEST_CASE(importmulti_rescan, TestChain100Setup)
         keys.setArray();
         UniValue key;
         key.setObject();
-        key.pushKV("scriptPubKey", HexStr(GetScriptForRawPubKey(coinbaseKey.GetPubKey())));
+        key.pushKV("scriptPubKey", HexStr(m_coinbase_script));
         key.pushKV("timestamp", 0);
         key.pushKV("internal", UniValue(true));
         keys.push_back(key);
@@ -267,14 +287,14 @@ BOOST_FIXTURE_TEST_CASE(importwallet_rescan, TestChain100Setup)
     // will pick up both blocks, not just the first.
     const int64_t BLOCK_TIME = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip()->GetBlockTimeMax() + 5);
     SetMockTime(BLOCK_TIME);
-    m_coinbase_txns.emplace_back(CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey())).vtx[0]);
-    m_coinbase_txns.emplace_back(CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey())).vtx[0]);
+    m_coinbase_txns.emplace_back(CreateAndProcessBlock({}, m_coinbase_script).vtx[0]);
+    m_coinbase_txns.emplace_back(CreateAndProcessBlock({}, m_coinbase_script).vtx[0]);
 
     // Set key birthday to block time increased by the timestamp window, so
     // rescan will start at the block time.
     const int64_t KEY_TIME = BLOCK_TIME + TIMESTAMP_WINDOW;
     SetMockTime(KEY_TIME);
-    m_coinbase_txns.emplace_back(CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey())).vtx[0]);
+    m_coinbase_txns.emplace_back(CreateAndProcessBlock({}, m_coinbase_script).vtx[0]);
 
     std::string backup_file = PathToString(m_args.GetDataDirNet() / "wallet.backup");
 
@@ -582,7 +602,7 @@ class ListCoinsTestingSetup : public TestChain100Setup
 public:
     ListCoinsTestingSetup()
     {
-        CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+        CreateAndProcessBlock({}, m_coinbase_script);
         wallet = CreateSyncedWallet(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
     }
 
@@ -606,7 +626,7 @@ public:
             LOCK(wallet->cs_wallet);
             blocktx = CMutableTransaction(*wallet->mapWallet.at(tx->GetHash()).tx);
         }
-        CreateAndProcessBlock({CMutableTransaction(blocktx)}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+        CreateAndProcessBlock({CMutableTransaction(blocktx)}, m_coinbase_script);
 
         LOCK(wallet->cs_wallet);
         LOCK(Assert(m_node.chainman)->GetMutex());
@@ -855,9 +875,9 @@ BOOST_FIXTURE_TEST_CASE(CreateWallet, TestChain100Setup)
         promise.get_future().wait();
     });
     std::string error;
-    m_coinbase_txns.push_back(CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey())).vtx[0]);
+    m_coinbase_txns.push_back(CreateAndProcessBlock({}, m_coinbase_script).vtx[0]);
     auto block_tx = TestSimpleSpend(*m_coinbase_txns[0], 0, coinbaseKey, GetScriptForRawPubKey(key.GetPubKey()));
-    m_coinbase_txns.push_back(CreateAndProcessBlock({block_tx}, GetScriptForRawPubKey(coinbaseKey.GetPubKey())).vtx[0]);
+    m_coinbase_txns.push_back(CreateAndProcessBlock({block_tx}, m_coinbase_script).vtx[0]);
     auto mempool_tx = TestSimpleSpend(*m_coinbase_txns[1], 0, coinbaseKey, GetScriptForRawPubKey(key.GetPubKey()));
     BOOST_CHECK(m_node.chain->broadcastTransaction(MakeTransactionRef(mempool_tx), DEFAULT_TRANSACTION_MAXFEE, false, error));
 
@@ -897,9 +917,9 @@ BOOST_FIXTURE_TEST_CASE(CreateWallet, TestChain100Setup)
     addtx_count = 0;
     auto handler = HandleLoadWallet(context, [&](std::unique_ptr<interfaces::Wallet> wallet) {
             BOOST_CHECK(rescan_completed);
-            m_coinbase_txns.push_back(CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey())).vtx[0]);
+            m_coinbase_txns.push_back(CreateAndProcessBlock({}, m_coinbase_script).vtx[0]);
             block_tx = TestSimpleSpend(*m_coinbase_txns[2], 0, coinbaseKey, GetScriptForRawPubKey(key.GetPubKey()));
-            m_coinbase_txns.push_back(CreateAndProcessBlock({block_tx}, GetScriptForRawPubKey(coinbaseKey.GetPubKey())).vtx[0]);
+            m_coinbase_txns.push_back(CreateAndProcessBlock({block_tx}, m_coinbase_script).vtx[0]);
             mempool_tx = TestSimpleSpend(*m_coinbase_txns[3], 0, coinbaseKey, GetScriptForRawPubKey(key.GetPubKey()));
             BOOST_CHECK(m_node.chain->broadcastTransaction(MakeTransactionRef(mempool_tx), DEFAULT_TRANSACTION_MAXFEE, false, error));
             m_node.validation_signals->SyncWithValidationInterfaceQueue();
@@ -938,9 +958,9 @@ BOOST_FIXTURE_TEST_CASE(RemoveTxs, TestChain100Setup)
     AddKey(*wallet, key);
 
     std::string error;
-    m_coinbase_txns.push_back(CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey())).vtx[0]);
+    m_coinbase_txns.push_back(CreateAndProcessBlock({}, m_coinbase_script).vtx[0]);
     auto block_tx = TestSimpleSpend(*m_coinbase_txns[0], 0, coinbaseKey, GetScriptForRawPubKey(key.GetPubKey()));
-    CreateAndProcessBlock({block_tx}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    CreateAndProcessBlock({block_tx}, m_coinbase_script);
 
     m_node.validation_signals->SyncWithValidationInterfaceQueue();
 
@@ -1020,6 +1040,165 @@ BOOST_FIXTURE_TEST_CASE(wallet_sync_tx_invalid_state_test, TestingSetup)
     BOOST_CHECK_EXCEPTION(wallet.transactionAddedToMempool(MakeTransactionRef(mtx)),
                           std::runtime_error,
                           HasReason("DB error adding transaction to wallet, write failed"));
+}
+
+// A confirmed output spent only by an abandoned wallet transaction must be
+// selectable again. pqsendtoaddress uses CWallet::IsSpent for that decision.
+BOOST_FIXTURE_TEST_CASE(abandoned_spend_is_not_spent, TestingSetup)
+{
+    CWallet wallet(m_node.chain.get(), "", CreateMockableWalletDatabase());
+    const uint256 block_hash{m_rng.rand256()};
+    constexpr int block_height = 100;
+
+    CMutableTransaction parent;
+    parent.vout.emplace_back(COIN, CScript() << OP_TRUE);
+    const CTransactionRef parent_tx{MakeTransactionRef(parent)};
+
+    CMutableTransaction spend;
+    spend.vin.emplace_back(parent_tx->GetHash(), 0);
+    spend.vout.emplace_back(COIN / 2, CScript() << OP_TRUE);
+    const CTransactionRef spend_tx{MakeTransactionRef(spend)};
+
+    const COutPoint outpoint{parent_tx->GetHash(), 0};
+
+    LOCK(wallet.cs_wallet);
+    wallet.SetLastBlockProcessed(block_height, block_hash);
+    BOOST_REQUIRE(wallet.AddToWallet(parent_tx, TxStateConfirmed{block_hash, block_height, /*index=*/0}));
+    BOOST_REQUIRE(wallet.AddToWallet(spend_tx, TxStateInactive{}));
+
+    BOOST_CHECK(wallet.IsSpent(outpoint));
+    BOOST_CHECK(wallet.AbandonTransaction(spend_tx->GetHash().ToUint256()));
+    const CWalletTx* abandoned = wallet.GetWalletTx(spend_tx->GetHash().ToUint256());
+    BOOST_REQUIRE(abandoned);
+    BOOST_CHECK(abandoned->isAbandoned());
+    BOOST_CHECK(!wallet.IsSpent(outpoint));
+
+    const CWalletTx* confirmed = wallet.GetWalletTx(parent_tx->GetHash().ToUint256());
+    BOOST_REQUIRE(confirmed);
+    BOOST_CHECK_GE(wallet.GetTxDepthInMainChain(*confirmed), 1);
+    BOOST_CHECK(!wallet.IsSpent(outpoint));
+}
+
+static std::vector<std::pair<COutPoint, CAmount>> PqValues(const std::vector<CAmount>& values)
+{
+    std::vector<std::pair<COutPoint, CAmount>> utxos;
+    uint32_t n = 1;
+    for (CAmount value : values) {
+        uint256 hash;
+        hash.data()[0] = static_cast<unsigned char>(n);
+        hash.data()[1] = static_cast<unsigned char>(n >> 8);
+        utxos.emplace_back(COutPoint{Txid::FromUint256(hash), 0}, value);
+        ++n;
+    }
+    return utxos;
+}
+
+static CScript PqLegacyP2PKHForTest()
+{
+    const std::vector<unsigned char> keyhash(20, 0x11);
+    return CScript() << OP_DUP << OP_HASH160 << keyhash << OP_EQUALVERIFY << OP_CHECKSIGDILITHIUM;
+}
+
+static CScript PqNativeProgramForTest()
+{
+    const std::vector<unsigned char> program(20, 0x22);
+    return CScript() << OP_2 << program;
+}
+
+// One large legacy output must be enough for 1 QBX. A larger amount that
+// cannot fit in 16 inputs still continues in a later batch.
+BOOST_AUTO_TEST_CASE(pqsend_selects_minimum_inputs)
+{
+    const CFeeRate feerate{5 * 1000}; // pqsendtoaddress "normal"
+    const CAmount one_qbx{COIN};
+    const CAmount coinbase_value{25 * COIN / 2}; // 12.5 QBX
+
+    std::vector<CAmount> values{coinbase_value};
+    for (int i = 0; i < 40; ++i) {
+        values.push_back(COIN / 100);
+    }
+    const auto utxos = PqValues(values);
+    const CScript legacy_script{PqLegacyP2PKHForTest()};
+    const std::vector<CScript> two_outputs{legacy_script, legacy_script};
+
+    const auto one = SelectMinimumPqInputs(utxos, {}, one_qbx, feerate, /*legacy_scriptsig=*/true, PQ_WITNESS_SCALE_FACTOR, two_outputs);
+    BOOST_CHECK_EQUAL(one.size(), 1U);
+    BOOST_CHECK_EQUAL(one.front().second, coinbase_value);
+    BOOST_CHECK_LE(one.size(), 16U);
+
+    const PqSpendWeight priced{EstimatePqSpendWeight(one.size(), /*legacy_scriptsig=*/true, PQ_WITNESS_SCALE_FACTOR, two_outputs)};
+    BOOST_CHECK_EQUAL(priced.weight, priced.vsize * PQ_WITNESS_SCALE_FACTOR);
+    BOOST_CHECK_LT(priced.weight, MAX_STANDARD_TX_WEIGHT);
+    BOOST_CHECK_EQUAL(EstimateMinimumPqSendFees(utxos, one_qbx, feerate, /*legacy_scriptsig=*/true, PQ_WITNESS_SCALE_FACTOR, two_outputs),
+                      feerate.GetFee(static_cast<uint32_t>(priced.vsize)));
+
+    std::vector<CAmount> small(40, COIN);
+    const auto many = PqValues(small);
+    std::set<COutPoint> used;
+    CAmount remaining = 20 * COIN;
+    int batches = 0;
+    while (remaining > 0 && batches < 8) {
+        const auto selected = SelectMinimumPqInputs(many, used, remaining, feerate, /*legacy_scriptsig=*/true, PQ_WITNESS_SCALE_FACTOR, two_outputs);
+        BOOST_REQUIRE(!selected.empty());
+        BOOST_CHECK_LE(selected.size(), 4U);
+        if (batches == 0) {
+            BOOST_CHECK_EQUAL(selected.size(), 4U);
+        }
+        CAmount total = 0;
+        for (const auto& utxo : selected) total += utxo.second;
+        const PqSpendWeight batch_two{EstimatePqSpendWeight(selected.size(), /*legacy_scriptsig=*/true, PQ_WITNESS_SCALE_FACTOR, two_outputs)};
+        const PqSpendWeight batch_one{EstimatePqSpendWeight(selected.size(), /*legacy_scriptsig=*/true, PQ_WITNESS_SCALE_FACTOR, {legacy_script})};
+        const CAmount fee2 = feerate.GetFee(static_cast<uint32_t>(batch_two.vsize));
+        const CAmount sent = total < remaining + fee2
+            ? total - feerate.GetFee(static_cast<uint32_t>(batch_one.vsize))
+            : remaining;
+        BOOST_REQUIRE(sent > 0);
+        remaining -= sent;
+        for (const auto& utxo : selected) used.insert(utxo.first);
+        ++batches;
+    }
+    BOOST_CHECK_EQUAL(remaining, 0);
+    BOOST_CHECK_GT(batches, 1);
+
+    const PqSpendWeight four{EstimatePqSpendWeight(4, /*legacy_scriptsig=*/true, PQ_WITNESS_SCALE_FACTOR, two_outputs)};
+    const PqSpendWeight five{EstimatePqSpendWeight(5, /*legacy_scriptsig=*/true, PQ_WITNESS_SCALE_FACTOR, two_outputs)};
+    BOOST_CHECK_LE(four.weight, MAX_STANDARD_TX_WEIGHT);
+    BOOST_CHECK_GT(five.weight, MAX_STANDARD_TX_WEIGHT);
+}
+
+BOOST_AUTO_TEST_CASE(pq_native_satisfaction_matches_consensus_weight)
+{
+    const CScript native{PqNativeProgramForTest()};
+    const CScript legacy{PqLegacyP2PKHForTest()};
+    const std::vector<CScript> native_outputs{native, native};
+    const std::vector<CScript> legacy_outputs{legacy, native};
+
+    const PqSpendWeight legacy_one{EstimatePqSpendWeight(1, /*legacy_scriptsig=*/true, PQ_WITNESS_SCALE_FACTOR, legacy_outputs)};
+    const PqSpendWeight native_one{EstimatePqSpendWeight(1, /*legacy_scriptsig=*/false, PQ_WITNESS_SCALE_FACTOR, native_outputs)};
+    const CTransaction native_skeleton{BuildPqSatisfactionTransaction(1, /*legacy_scriptsig=*/false, native_outputs)};
+    const PqSpendWeight measured{MeasurePqSpendWeight(native_skeleton, PQ_WITNESS_SCALE_FACTOR)};
+
+    BOOST_CHECK_EQUAL(native_one.weight, measured.weight);
+    BOOST_CHECK_EQUAL(native_one.vsize, measured.vsize);
+    BOOST_CHECK_EQUAL(native_one.stripped_size, measured.stripped_size);
+    BOOST_CHECK_EQUAL(native_one.total_size, measured.total_size);
+    BOOST_CHECK_GT(native_one.witness_size, 0);
+    BOOST_CHECK_EQUAL(legacy_one.witness_size, 0);
+    BOOST_CHECK_LT(native_one.weight, legacy_one.weight);
+    BOOST_CHECK_LT(native_one.weight, native_one.total_size * PQ_WITNESS_SCALE_FACTOR);
+    BOOST_CHECK_EQUAL(legacy_one.weight, legacy_one.total_size * PQ_WITNESS_SCALE_FACTOR);
+    BOOST_CHECK_LE(native_one.weight, MAX_STANDARD_TX_WEIGHT);
+
+    const PqSpendWeight native_sixteen{EstimatePqSpendWeight(16, /*legacy_scriptsig=*/false, PQ_WITNESS_SCALE_FACTOR, native_outputs)};
+    BOOST_CHECK_LE(native_sixteen.weight, MAX_STANDARD_TX_WEIGHT);
+
+    const CFeeRate feerate{5 * 1000};
+    std::vector<CAmount> small(8, COIN);
+    const auto utxos = PqValues(small);
+    const auto selected = SelectMinimumPqInputs(utxos, {}, 5 * COIN, feerate, /*legacy_scriptsig=*/false, PQ_WITNESS_SCALE_FACTOR, native_outputs);
+    BOOST_CHECK(!selected.empty());
+    BOOST_CHECK_LE(EstimatePqSpendWeight(selected.size(), /*legacy_scriptsig=*/false, PQ_WITNESS_SCALE_FACTOR, native_outputs).weight,
+                   MAX_STANDARD_TX_WEIGHT);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

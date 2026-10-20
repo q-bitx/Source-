@@ -376,7 +376,10 @@ if (MatchQbitxDilithium(scriptPubKey, qbitx_pub)) {
 
 CScript GetScriptForRawPubKey(const CPubKey& pubKey)
 {
-    return CScript() << std::vector<unsigned char>(pubKey.begin(), pubKey.end()) << OP_PQCHECKSIG;
+    // CPubKey is an ECDSA key (33 or 65 bytes). OP_PQCHECKSIG hard-fails unless
+    // the pubkey is a Dilithium key, so that opcode made this output unspendable
+    // and invisible to IsMine. Dilithium keys use DilithiumPubKeyDestination.
+    return CScript() << std::vector<unsigned char>(pubKey.begin(), pubKey.end()) << OP_CHECKSIG;
 }
 
 CScript GetScriptForMultisig(int nRequired, const std::vector<CPubKey>& keys)

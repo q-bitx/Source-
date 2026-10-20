@@ -1286,7 +1286,7 @@ BOOST_AUTO_TEST_CASE(sign_paytoanchor)
     FillableSigningProvider keystore;
     SignatureData sig_data;
     CMutableTransaction prev, curr;
-    prev.vout.emplace_back(0, GetScriptForDestination(PayToAnchor{}));
+    prev.vout.emplace_back(0, CScript() << OP_1 << std::vector<unsigned char>{0x4e, 0x73});
 
     curr.vin.emplace_back(COutPoint{prev.GetHash(), 0});
 
@@ -1327,9 +1327,9 @@ BOOST_AUTO_TEST_CASE(script_IsPushOnly_on_invalid_scripts)
 
 BOOST_AUTO_TEST_CASE(script_GetScriptAsm)
 {
-    BOOST_CHECK_EQUAL("OP_CHECKLOCKTIMEVERIFY", ScriptToAsmStr(CScript() << OP_NOP2, true));
     BOOST_CHECK_EQUAL("OP_CHECKLOCKTIMEVERIFY", ScriptToAsmStr(CScript() << OP_CHECKLOCKTIMEVERIFY, true));
-    BOOST_CHECK_EQUAL("OP_CHECKLOCKTIMEVERIFY", ScriptToAsmStr(CScript() << OP_NOP2));
+    BOOST_CHECK_EQUAL("OP_CHECKLOCKTIMEVERIFY", ScriptToAsmStr(CScript() << OP_CHECKLOCKTIMEVERIFY, true));
+    BOOST_CHECK_EQUAL("OP_CHECKLOCKTIMEVERIFY", ScriptToAsmStr(CScript() << OP_CHECKLOCKTIMEVERIFY));
     BOOST_CHECK_EQUAL("OP_CHECKLOCKTIMEVERIFY", ScriptToAsmStr(CScript() << OP_CHECKLOCKTIMEVERIFY));
 
     std::string derSig("304502207fa7a6d1e0ee81132a269ad84e68d695483745cde8b541e3bf630749894e342a022100c1f7ab20e13e22fb95281a870f3dcf38d782e53023ee313d741ad0cfbc0c5090");

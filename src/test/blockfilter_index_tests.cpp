@@ -72,7 +72,8 @@ CBlock BuildChainTestingSetup::CreateBlock(const CBlockIndex* prev,
     std::unique_ptr<CBlockTemplate> pblocktemplate = BlockAssembler{m_node.chainman->ActiveChainstate(), m_node.mempool.get(), options}.CreateNewBlock();
     CBlock& block = pblocktemplate->block;
     block.hashPrevBlock = prev->GetBlockHash();
-    block.nTime = prev->nTime + 1;
+    block.nTime = prev->nTime + 150;
+    block.nBits = GetNextWorkRequired(prev, &block, m_node.chainman->GetConsensus());
 
     // Replace mempool-selected txns with just coinbase plus passed-in txns:
     block.vtx.resize(1);
@@ -166,8 +167,11 @@ BOOST_FIXTURE_TEST_CASE(blockfilter_index_initial_sync, BuildChainTestingSetup)
     }
     CKey coinbase_key_A = GenerateRandomKey();
     CKey coinbase_key_B = GenerateRandomKey();
-    CScript coinbase_script_pub_key_A = GetScriptForDestination(PKHash(coinbase_key_A.GetPubKey()));
-    CScript coinbase_script_pub_key_B = GetScriptForDestination(PKHash(coinbase_key_B.GetPubKey()));
+    const auto pq_coinbase = [](const CKey& key) {
+        return CScript() << OP_DUP << OP_HASH160 << ToByteVector(key.GetPubKey().GetID()) << OP_EQUALVERIFY << OP_CHECKSIGDILITHIUM;
+    };
+    CScript coinbase_script_pub_key_A = pq_coinbase(coinbase_key_A);
+    CScript coinbase_script_pub_key_B = pq_coinbase(coinbase_key_B);
     std::vector<std::shared_ptr<CBlock>> chainA, chainB;
     BOOST_REQUIRE(BuildChain(tip, coinbase_script_pub_key_A, 10, chainA));
     BOOST_REQUIRE(BuildChain(tip, coinbase_script_pub_key_B, 10, chainB));

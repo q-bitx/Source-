@@ -6,6 +6,7 @@
 #define BITCOIN_TEST_UTIL_SETUP_COMMON_H
 
 #include <common/args.h> // IWYU pragma: export
+#include <crypto/dilithium_wrapper.h>
 #include <kernel/caches.h>
 #include <kernel/context.h>
 #include <key.h>
@@ -250,7 +251,12 @@ struct TestChain100Setup : public TestingSetup {
     void MockMempoolMinFee(const CFeeRate& target_feerate);
 
     std::vector<CTransactionRef> m_coinbase_txns; // For convenience, coinbase transactions
-    CKey coinbaseKey; // private/public key needed to spend coinbase transactions
+    CKey coinbaseKey; // ECDSA key for tests that build their own non-coinbase outputs
+    // Spendable legacy Dilithium P2PKH used by mineBlocks(). CheckBlock rejects
+    // any other coinbase script. coinbaseKey cannot spend this output.
+    CScript m_coinbase_script;
+    std::vector<unsigned char> m_coinbase_pq_pubkey;
+    pqcrypto::dilithium::PQPrivateKey m_coinbase_pq_priv{};
 };
 
 /**

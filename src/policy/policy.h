@@ -19,6 +19,10 @@ class CCoinsViewCache;
 class CFeeRate;
 class CScript;
 
+namespace Consensus {
+struct Params;
+}
+
 /** Default for -blockmaxweight, which controls the range of block weights the mining code will create **/
 static constexpr unsigned int DEFAULT_BLOCK_MAX_WEIGHT{QBX_MAX_BLOCK_WEIGHT};
 /** Default for -blockreservedweight **/
@@ -32,6 +36,15 @@ static constexpr unsigned int MINIMUM_BLOCK_RESERVED_WEIGHT{2000};
 static constexpr unsigned int DEFAULT_BLOCK_MIN_TX_FEE{1000};
 /** The maximum weight for transactions we're willing to relay/mine */
 static constexpr int32_t MAX_STANDARD_TX_WEIGHT{400000};
+/**
+ * Permanent mempool-only cap for a classified legacy-PQ to native-PQ migration.
+ * It applies after PQ witness activation and has no end height. Consensus block
+ * weight stays QBX_MAX_BLOCK_WEIGHT. Ordinary transactions, including
+ * legacy-to-legacy spends, stay at MAX_STANDARD_TX_WEIGHT. This is not a
+ * consensus rule and not a future hard fork.
+ */
+static constexpr int32_t MIGRATION_MAX_STANDARD_WEIGHT{1600000};
+static_assert(MIGRATION_MAX_STANDARD_WEIGHT > MAX_STANDARD_TX_WEIGHT);
 /** The minimum non-witness size for transactions we're willing to relay/mine: one larger than 64  */
 static constexpr unsigned int MIN_STANDARD_TX_NONWITNESS_SIZE{65};
 /** Maximum number of signature check operations in an IsStandard() P2SH script */
@@ -151,6 +164,14 @@ static constexpr decltype(CTransaction::version) TX_MAX_STANDARD_VERSION{3};
 * @return True if all outputs (scriptPubKeys) use only standard transaction forms
 */
 bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason, int witness_discount_scale = WITNESS_SCALE_FACTOR);
+/** Every IsStandardTx check except the MAX_STANDARD_TX_WEIGHT limit. */
+bool IsStandardTxExceptWeight(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason);
+/**
+ * True when tx may use MIGRATION_MAX_STANDARD_WEIGHT at next_height.
+ * Requires PQ witness activation. Prevout types come from view, not from scriptSig.
+ * There is no end height.
+ */
+bool IsQualifyingLegacyMigration(const CTransaction& tx, const CCoinsViewCache& view, int next_height, const Consensus::Params& params);
 /**
 * Check for standard transaction types
 * @param[in] mapInputs       Map of previous transactions that have outputs we're spending

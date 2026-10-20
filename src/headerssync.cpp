@@ -9,6 +9,9 @@
 #include <util/time.h>
 #include <util/vector.h>
 
+#include <cstdint>
+#include <limits>
+
 // The two constants below are computed using the simulation script in
 // contrib/devtools/headerssync-params.py.
 
@@ -22,6 +25,33 @@ constexpr size_t REDOWNLOAD_BUFFER_SIZE{14827}; // 14827/624 = ~23.8 commitments
 // Our memory analysis assumes 48 bytes for a CompressedHeader (so we should
 // re-calculate parameters if we compress further)
 static_assert(sizeof(CompressedHeader) == 48);
+
+/** Commitment cap for one presync.
+ *
+ * 6 blocks/second is the MTP rule's fastest honest rate. A negative
+ * (clock behind chain-start MTP) delta used to be converted to uint64_t by
+ * the unsigned division and became a multi-quadrillion cap, so the presync
+ * abort never fired. Block timestamps are uint32, so a span past that range
+ * plus the future-block slack is clamped rather than multiplied in a way
+ * that can overflow.
+ */
+static uint64_t HeadersSyncCommitmentLimit(int64_t now_seconds, int64_t chain_start_mtp)
+{
+    uint64_t elapsed = 0;
+    if (now_seconds > chain_start_mtp) {
+        elapsed = static_cast<uint64_t>(now_seconds) - static_cast<uint64_t>(chain_start_mtp);
+    }
+    constexpr uint64_t future_slack = static_cast<uint64_t>(MAX_FUTURE_BLOCK_TIME);
+    constexpr uint64_t max_span =
+        static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + future_slack;
+    uint64_t span = future_slack;
+    if (elapsed > max_span - future_slack) {
+        span = max_span;
+    } else {
+        span = elapsed + future_slack;
+    }
+    return (span * 6) / HEADER_COMMITMENT_PERIOD;
+}
 
 HeadersSyncState::HeadersSyncState(NodeId id, const Consensus::Params& consensus_params,
         const CBlockIndex* chain_start, const arith_uint256& minimum_required_work) :
@@ -41,7 +71,8 @@ HeadersSyncState::HeadersSyncState(NodeId id, const Consensus::Params& consensus
     // exceeds this bound, because it's not possible for a consensus-valid
     // chain to be longer than this (at the current time -- in the future we
     // could try again, if necessary, to sync a longer chain).
-    m_max_commitments = 6*(Ticks<std::chrono::seconds>(NodeClock::now() - NodeSeconds{std::chrono::seconds{chain_start->GetMedianTimePast()}}) + MAX_FUTURE_BLOCK_TIME) / HEADER_COMMITMENT_PERIOD;
+    const int64_t now_seconds = Ticks<std::chrono::seconds>(NodeClock::now().time_since_epoch());
+    m_max_commitments = HeadersSyncCommitmentLimit(now_seconds, chain_start->GetMedianTimePast());
 
     LogDebug(BCLog::NET, "Initial headers sync started with peer=%d: height=%i, max_commitments=%i, min_work=%s\n", m_id, m_current_height, m_max_commitments, m_minimum_required_work.ToString());
 }

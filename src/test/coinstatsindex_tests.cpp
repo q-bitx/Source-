@@ -48,7 +48,7 @@ BOOST_FIXTURE_TEST_CASE(coinstatsindex_initial_sync, TestChain100Setup)
     // Check that CoinStatsIndex updates with new blocks.
     BOOST_CHECK(coin_stats_index.LookUpStats(*block_index));
 
-    const CScript script_pub_key{CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG};
+    const CScript script_pub_key{m_coinbase_script};
     std::vector<CMutableTransaction> noTxns;
     CreateAndProcessBlock(noTxns, script_pub_key);
 
@@ -90,7 +90,7 @@ BOOST_FIXTURE_TEST_CASE(coinstatsindex_unclean_shutdown, TestChain100Setup)
         std::shared_ptr<const CBlock> new_block;
         CBlockIndex* new_block_index = nullptr;
         {
-            const CScript script_pub_key{CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG};
+            const CScript script_pub_key{m_coinbase_script};
             const CBlock block = this->CreateBlock({}, script_pub_key, chainstate);
 
             new_block = std::make_shared<CBlock>(block);

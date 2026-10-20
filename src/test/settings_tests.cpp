@@ -88,14 +88,14 @@ BOOST_AUTO_TEST_CASE(ReadWrite)
         "dupe": "dupe"
     })");
     BOOST_CHECK(!common::ReadSettings(path, values, errors));
-    std::vector<std::string> dup_keys = {strprintf("Found duplicate key dupe in settings file %s", fs::PathToString(path))};
+    std::vector<std::string> dup_keys = {strprintf("Found duplicate key dupe in settings file %s", PathToString(path))};
     BOOST_CHECK_EQUAL_COLLECTIONS(errors.begin(), errors.end(), dup_keys.begin(), dup_keys.end());
     BOOST_CHECK(values.empty());
 
     // Check non-kv json files not allowed
     WriteText(path, R"("non-kv")");
     BOOST_CHECK(!common::ReadSettings(path, values, errors));
-    std::vector<std::string> non_kv = {strprintf("Found non-object value \"non-kv\" in settings file %s", fs::PathToString(path))};
+    std::vector<std::string> non_kv = {strprintf("Found non-object value \"non-kv\" in settings file %s", PathToString(path))};
     BOOST_CHECK_EQUAL_COLLECTIONS(errors.begin(), errors.end(), non_kv.begin(), non_kv.end());
 
     // Check invalid json not allowed
@@ -103,7 +103,7 @@ BOOST_AUTO_TEST_CASE(ReadWrite)
     BOOST_CHECK(!common::ReadSettings(path, values, errors));
     std::vector<std::string> fail_parse = {strprintf("Settings file %s does not contain valid JSON. This is probably caused by disk corruption or a crash, "
                                                      "and can be fixed by removing the file, which will reset settings to default values.",
-                                                     fs::PathToString(path))};
+                                                     PathToString(path))};
     BOOST_CHECK_EQUAL_COLLECTIONS(errors.begin(), errors.end(), fail_parse.begin(), fail_parse.end());
 }
 

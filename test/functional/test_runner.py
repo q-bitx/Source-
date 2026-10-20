@@ -109,6 +109,11 @@ BASE_SCRIPTS = [
     'feature_assumeutxo.py',
     'mempool_updatefromblock.py',
     'feature_pq_witness_mempool_rpc.py --legacy-wallet',
+    'feature_pool_gbt_p0.py --legacy-wallet',
+    'feature_pq_release_audit.py --legacy-wallet',
+    'feature_migration_policy.py --legacy-wallet',
+    'feature_pqmigratelegacy.py --legacy-wallet',
+    'feature_pqmigratelegacy.py --descriptors',
     'feature_pq_witness_mempool_rpc.py --descriptors',
     'feature_pq_consolidate_legacy.py --legacy-wallet',
     'feature_pq_consolidate_legacy.py --descriptors',
@@ -867,7 +872,7 @@ class TestResult():
 def check_script_prefixes():
     """Check that test scripts start with one of the allowed name prefixes."""
 
-    good_prefixes_re = re.compile("^(example|feature|interface|mempool|mining|p2p|rpc|wallet|tool)_")
+    good_prefixes_re = re.compile("^(example|feature|interface|mempool|mining|p2p|rpc|wallet|tool|pq)_")
     bad_script_names = [script for script in ALL_SCRIPTS if good_prefixes_re.match(script) is None]
 
     if bad_script_names:

@@ -1965,7 +1965,8 @@ RPCHelpMan backupwallet()
     UniValue result(UniValue::VOBJ);
     result.pushKV("wallet", pwallet->GetName());
     result.pushKV("backup_path", PathToString(backup_path));
-    result.pushKV("method", "sqlite-backup-api");
+    const std::string db_format = pwallet->GetDatabase().Format();
+    result.pushKV("method", db_format == "bdb" ? "bdb-file-copy" : db_format == "sqlite" ? "sqlite-backup-api" : db_format);
 
     return result;
 },

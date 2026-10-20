@@ -3,6 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #include <wallet/wallet.h>
+#include <wallet/pq_sign.h>
 
 #include <protocol.h>
 #include <bitcoin-build-config.h> // IWYU pragma: keep
@@ -37,7 +38,9 @@
 #include <psbt.h>
 #include <pubkey.h>
 #include <random.h>
+#include <crypto/dilithium.h>
 #include <script/descriptor.h>
+#include <script/pq_script.h>
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <script/sign.h>
@@ -2332,6 +2335,87 @@ bool wallet::CWallet::DilithiumSignTransaction(CMutableTransaction& tx) const
     return true;
 }
 
+bool SignPqWalletInputs(const CWallet& wallet, CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, bilingual_str& error)
+{
+    AssertLockHeld(wallet.cs_wallet);
+    const CTransaction tx_for_hash{tx};
+    const int32_t hash_type = SIGHASH_ALL;
+    for (size_t i = 0; i < tx.vin.size(); ++i) {
+        const auto coin_it = coins.find(tx.vin[i].prevout);
+        if (coin_it == coins.end()) {
+            error = Untranslated("Missing input for Dilithium signing");
+            return false;
+        }
+        const CTxOut& prevout = coin_it->second.out;
+        const bool native = IsNativePQWitnessProgram(prevout.scriptPubKey);
+        std::vector<std::vector<unsigned char>> solutions;
+        const TxoutType which = Solver(prevout.scriptPubKey, solutions);
+        const bool legacy = !native && which == TxoutType::DILITHIUM_PUBKEYHASH && !solutions.empty() && solutions[0].size() == 20;
+        if (!native && !legacy) {
+            error = Untranslated("Input is not a spendable Dilithium output");
+            return false;
+        }
+        const std::vector<unsigned char> program = native
+            ? std::vector<unsigned char>(prevout.scriptPubKey.begin() + 2, prevout.scriptPubKey.end())
+            : solutions[0];
+        const CKeyID keyid{uint160(program)};
+        std::vector<unsigned char> privkey;
+        std::vector<unsigned char> pubkey;
+        bool found = false;
+        for (ScriptPubKeyMan* spkm : wallet.GetAllScriptPubKeyMans()) {
+            if (auto* desc = dynamic_cast<DescriptorScriptPubKeyMan*>(spkm)) {
+                if (desc->GetDilithiumKeys(keyid, privkey, pubkey)) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            const auto priv_it = wallet.map_dilithium_priv.find(keyid);
+            const auto pub_it = wallet.map_dilithium_pub.find(keyid);
+            if (priv_it != wallet.map_dilithium_priv.end() && pub_it != wallet.map_dilithium_pub.end()) {
+                privkey = priv_it->second;
+                pubkey = pub_it->second;
+                found = true;
+            }
+        }
+        if (found && pubkey.size() != static_cast<size_t>(DILITHIUM_PUBLICKEYBYTES) &&
+            privkey.size() == static_cast<size_t>(DILITHIUM_SECRETKEYBYTES + DILITHIUM_PUBLICKEYBYTES)) {
+            pubkey.assign(privkey.begin() + DILITHIUM_SECRETKEYBYTES, privkey.end());
+        }
+        if (!found || pubkey.size() != static_cast<size_t>(DILITHIUM_PUBLICKEYBYTES)) {
+            error = Untranslated("No Dilithium private key for input");
+            return false;
+        }
+
+        uint256 sighash;
+        if (native) {
+            CScript scriptcode;
+            scriptcode << OP_DUP << OP_HASH160 << program << OP_EQUALVERIFY << OP_CHECKSIG;
+            sighash = SignatureHash(scriptcode, tx_for_hash, i, hash_type, prevout.nValue, SigVersion::WITNESS_V0, nullptr);
+        } else {
+            sighash = SignatureHash(prevout.scriptPubKey, tx_for_hash, i, hash_type, 0, SigVersion::BASE, nullptr);
+        }
+        std::vector<unsigned char> message(sighash.begin(), sighash.end());
+        std::vector<unsigned char> signature;
+        if (!PQ_Sign(signature, message, privkey)) {
+            error = Untranslated("Dilithium signing failed");
+            return false;
+        }
+        signature.push_back(static_cast<unsigned char>(hash_type));
+        if (native) {
+            tx.vin[i].scriptSig = CScript{};
+            tx.vin[i].scriptWitness.stack = {signature, pubkey};
+        } else {
+            CScript script_sig;
+            script_sig << signature << pubkey;
+            tx.vin[i].scriptSig = script_sig;
+            tx.vin[i].scriptWitness.stack.clear();
+        }
+    }
+    return true;
+}
+
 bool CWallet::LoadPQPrivateKey(PQPrivateKey& key_out) const {
     if (pq_private_key.empty()) return false;
     key_out = PQPrivateKey(pq_private_key);
@@ -2455,6 +2539,7 @@ OutputType CWallet::TransactionChangeType(const std::optional<OutputType>& chang
     bool any_wpkh{false};
     bool any_sh{false};
     bool any_pkh{false};
+    bool any_dilithium{false};
 
     for (const auto& recipient : vecSend) {
         if (std::get_if<WitnessV1Taproot>(&recipient.dest)) {
@@ -2465,7 +2550,31 @@ OutputType CWallet::TransactionChangeType(const std::optional<OutputType>& chang
             any_sh = true;
         } else if (std::get_if<PKHash>(&recipient.dest)) {
             any_pkh = true;
+        } else if (std::holds_alternative<DilithiumPKHash>(recipient.dest) ||
+                   std::holds_alternative<DilithiumPubKeyDestination>(recipient.dest) ||
+                   std::holds_alternative<DilithiumScriptHash>(recipient.dest) ||
+                   std::holds_alternative<DilithiumWitnessV0KeyHash>(recipient.dest) ||
+                   std::holds_alternative<DilithiumWitnessV0ScriptHash>(recipient.dest)) {
+            any_dilithium = true;
         }
+    }
+
+    // A Dilithium payment must not send change to an ECDSA/taproot script.
+    // That change is not spendable by the Dilithium signer.
+    if (any_dilithium) {
+        bool witness_active = false;
+        if (HaveChain()) {
+            if (const std::optional<int> height = chain().getHeight()) {
+                witness_active = Consensus::IsPQWitnessEnabled(Params().GetConsensus(), *height + 1);
+            }
+        }
+        if (witness_active && GetScriptPubKeyMan(OutputType::DILITHIUM_BECH32, /*internal=*/true)) {
+            return OutputType::DILITHIUM_BECH32;
+        }
+        if (GetScriptPubKeyMan(OutputType::DILITHIUM_LEGACY, /*internal=*/true)) {
+            return OutputType::DILITHIUM_LEGACY;
+        }
+        return witness_active ? OutputType::DILITHIUM_BECH32 : OutputType::DILITHIUM_LEGACY;
     }
 
     const bool has_bech32m_spkman(GetScriptPubKeyMan(OutputType::BECH32M, /*internal=*/true));
@@ -2959,6 +3068,16 @@ std::set<std::string> CWallet::ListAddrBookLabels(const std::optional<AddressPur
 
 util::Result<CTxDestination> ReserveDestination::GetReservedDestination(bool internal)
 {
+    // Dilithium keys are created by GetNewDestination, not the internal ECDSA keypool.
+    if (type == OutputType::DILITHIUM_LEGACY || type == OutputType::DILITHIUM_BECH32) {
+        if (!IsValidDestination(address)) {
+            auto dest = const_cast<CWallet*>(pwallet)->GetNewDestination(type, "");
+            if (!dest) return dest;
+            address = *dest;
+            nIndex = -2;
+        }
+        return address;
+    }
     m_spk_man = pwallet->GetScriptPubKeyMan(type, internal);
     if (!m_spk_man) {
         return util::Error{strprintf(_("Error: No %s addresses available."), FormatOutputType(type))};
@@ -2978,6 +3097,11 @@ util::Result<CTxDestination> ReserveDestination::GetReservedDestination(bool int
 
 void ReserveDestination::KeepDestination()
 {
+    if (nIndex == -2) {
+        nIndex = -1;
+        address = CNoDestination();
+        return;
+    }
     if (nIndex != -1) {
         m_spk_man->KeepDestination(nIndex, type);
     }
@@ -2987,6 +3111,11 @@ void ReserveDestination::KeepDestination()
 
 void ReserveDestination::ReturnDestination()
 {
+    if (nIndex == -2) {
+        nIndex = -1;
+        address = CNoDestination();
+        return;
+    }
     if (nIndex != -1) {
         m_spk_man->ReturnDestination(nIndex, fInternal, address);
     }

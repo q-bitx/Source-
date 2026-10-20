@@ -4,6 +4,7 @@
 
 #include <chainparams.h>
 #include <node/miner.h>
+#include <script/script.h>
 #include <net_processing.h>
 #include <pow.h>
 #include <test/util/setup_common.h>
@@ -20,7 +21,10 @@ static void mineBlock(const node::NodeContext& node, std::chrono::seconds block_
 {
     auto curr_time = GetTime<std::chrono::seconds>();
     SetMockTime(block_time); // update time so the block is created with it
-    CBlock block = node::BlockAssembler{node.chainman->ActiveChainstate(), nullptr, {}}.CreateNewBlock()->block;
+    node::BlockAssembler::Options options;
+    const std::vector<unsigned char> payout_id(20, 0x21);
+    options.coinbase_output_script = CScript() << OP_DUP << OP_HASH160 << payout_id << OP_EQUALVERIFY << OP_CHECKSIGDILITHIUM;
+    CBlock block = node::BlockAssembler{node.chainman->ActiveChainstate(), nullptr, options}.CreateNewBlock()->block;
     while (!CheckProofOfWork(block.GetHash(), block.nBits, node.chainman->GetConsensus())) ++block.nNonce;
     block.fChecked = true; // little speedup
     SetMockTime(curr_time); // process block at current time

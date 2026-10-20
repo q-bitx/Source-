@@ -8,8 +8,12 @@
 #include <headerssync.h>
 #include <pow.h>
 #include <test/util/setup_common.h>
+#include <util/time.h>
 #include <validation.h>
 #include <vector>
+
+#include <cstdint>
+#include <limits>
 
 #include <boost/test/unit_test.hpp>
 
@@ -141,6 +145,46 @@ BOOST_AUTO_TEST_CASE(headers_sync_state)
     // Nevertheless, no validation errors should have been detected with the
     // chain:
     BOOST_CHECK(result.success);
+}
+
+// A chain-start MTP ahead of the node clock used to wrap m_max_commitments.
+// A 10-day future MTP produced signed span -856800 and uint64 cap
+// 29562089861705786. The cap is not consensus: it only bounds presync work.
+BOOST_AUTO_TEST_CASE(headers_sync_future_mtp_commitment_cap)
+{
+    const CBlockIndex* chain_start = WITH_LOCK(::cs_main, return m_node.chainman->m_blockman.LookupBlockIndex(Params().GenesisBlock().GetHash()));
+    BOOST_REQUIRE(chain_start);
+    const int64_t mtp = chain_start->GetMedianTimePast();
+    const arith_uint256 chain_work{1};
+
+    SetMockTime(mtp - 10 * 24 * 60 * 60);
+    {
+        HeadersSyncState behind(0, Params().GetConsensus(), chain_start, chain_work);
+        // Negative delta clamps to the 2-hour slack: 6*7200/624 = 69.
+        BOOST_CHECK_EQUAL(behind.GetMaxCommitments(), uint64_t{69});
+    }
+
+    SetMockTime(mtp + 24 * 60 * 60);
+    {
+        HeadersSyncState ahead(0, Params().GetConsensus(), chain_start, chain_work);
+        // (86400+7200)*6/624 = 900. A normal clock must not be forced down to 69.
+        BOOST_CHECK_EQUAL(ahead.GetMaxCommitments(), uint64_t{900});
+    }
+
+    // Far enough past the chain-start MTP to exceed the uint32 timestamp
+    // span, but still inside NodeClock's nanosecond time_point.
+    const int64_t far = mtp + static_cast<int64_t>(std::numeric_limits<uint32_t>::max()) + 100000;
+    BOOST_REQUIRE(far > 0);
+    BOOST_REQUIRE(far < int64_t{9000000000});
+    SetMockTime(far);
+    {
+        HeadersSyncState saturated(0, Params().GetConsensus(), chain_start, chain_work);
+        constexpr uint64_t capped =
+            (static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + 2 * 60 * 60) * 6 / 624;
+        BOOST_CHECK_EQUAL(saturated.GetMaxCommitments(), capped);
+        BOOST_CHECK(saturated.GetMaxCommitments() < uint64_t{100000000});
+    }
+    SetMockTime(0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

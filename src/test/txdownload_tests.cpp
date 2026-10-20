@@ -182,12 +182,14 @@ BOOST_FIXTURE_TEST_CASE(handle_missing_inputs, TestChain100Setup)
     // Transactions with missing inputs are treated differently depending on how much we know about
     // their parents.
     CKey wallet_key = GenerateRandomKey();
-    CScript destination = GetScriptForDestination(PKHash(wallet_key.GetPubKey()));
+    // PKHash is a Dilithium P2PKH. This hop is spent by an ECDSA key, so it is P2PK.
+    CScript destination = GetScriptForRawPubKey(wallet_key.GetPubKey());
     // Amount for spending coinbase in a 1-in-1-out tx, at depth n, each time deducting 1000 from the amount as fees.
-    CAmount amount_depth_1{50 * COIN - 1000};
+    // The parent spends a Dilithium coinbase, so the fee has to cover that vsize.
+    CAmount amount_depth_1{1250 * CENT - 50000};
     CAmount amount_depth_2{amount_depth_1 - 1000};
-    // Amount for spending coinbase in a 1-in-2-out tx, deducting 1000 in fees
-    CAmount amount_split_half{25 * COIN - 500};
+    // Amount for spending coinbase in a 1-in-2-out tx. Each output keeps half after the parent fee.
+    CAmount amount_split_half{625 * CENT - 25000};
     int test_chain_height{100};
 
     TxValidationState state_orphan;

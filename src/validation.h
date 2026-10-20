@@ -799,6 +799,14 @@ private:
         bool fAddToMempool,
         const CBlockIndex* old_tip) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
 
+    /**
+     * Re-accept mempool transactions after a forward tip change that flips the
+     * next-block PQ witness scale or PQ sigops flag. MaybeUpdateMempoolForReorg
+     * covers the same flags only when blocks were disconnected.
+     */
+    void RefreshMempoolAfterNextBlockActivation(const CBlockIndex* old_tip)
+        EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
+
     /** Check warning conditions and do some notifications on new chain tip set. */
     void UpdateTip(const CBlockIndex* pindexNew)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);

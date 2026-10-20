@@ -22,6 +22,10 @@
 /** Template base class for fixed-sized opaque blobs. */
 
 inline bool IsHex(std::string_view str) {
+    // Empty and odd-length strings are not hex. A previous local copy
+    // accepted both, which made FromUserHex reject short user input and
+    // made util_IsHex fail its own negative cases.
+    if (str.empty() || (str.size() % 2) != 0) return false;
     for (char c : str) {
         if (!((c >= '0' && c <= '9') ||
               (c >= 'a' && c <= 'f') ||
@@ -282,7 +286,17 @@ public:
     }
     
     static std::optional<uint256> FromUserHex(std::string_view str) {
-        return detail::FromUserHex<uint256>(str);
+        // User input may be short. Pad on the left so "1" and "0x10" are
+        // the same integers as the full 64-digit encoding. detail::FromUserHex
+        // requires an exact width and rejects those values.
+        if (str.starts_with("0x") || str.starts_with("0X")) {
+            str.remove_prefix(2);
+        }
+        constexpr size_t expected = size() * 2;
+        if (str.size() > expected) return std::nullopt;
+        std::string padded(expected - str.size(), '0');
+        padded.append(str);
+        return detail::FromHex<uint256>(padded);
     }
 
     constexpr uint256() = default;

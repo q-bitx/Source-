@@ -61,6 +61,8 @@ add_executable(test_bitcoin
   merkle_tests.cpp
   merkleblock_tests.cpp
   miner_tests.cpp
+  migration_policy_tests.cpp
+  pool_gbt_p0_tests.cpp
   miniminer_tests.cpp
   miniscript_tests.cpp
   minisketch_tests.cpp
@@ -139,12 +141,13 @@ add_executable(test_bitcoin
 #target_include_directories(test_bitcoin PRIVATE /usr/include)
 target_include_directories(test_bitcoin PRIVATE
   ${PROJECT_SOURCE_DIR}/src
+  ${CMAKE_BINARY_DIR}/src
   ${PROJECT_SOURCE_DIR}/src/test
   ${PROJECT_SOURCE_DIR}/src/crypto
-  ${PROJECT_SOURCE_DIR}/src/util
   ${PROJECT_SOURCE_DIR}/src/interfaces
   ${PROJECT_SOURCE_DIR}/src/node
   ${PROJECT_SOURCE_DIR}/src/wallet
+  ${PROJECT_SOURCE_DIR}/src/minisketch/include
 )
 include(TargetDataSources)
 target_json_data_sources(test_bitcoin

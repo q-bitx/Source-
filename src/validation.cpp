@@ -331,6 +331,11 @@ void Chainstate::MaybeUpdateMempoolForReorg(
                       old_tip_height + 1, new_tip_height + 1);
         }
         m_mempool->removeForReorg(m_chain, [](CTxMemPool::txiter) { return true; });
+        // Drop disconnected transactions instead of resurrecting them. Their
+        // cached witness, sigop, and block-limit accounting is stale across
+        // this activation. clear() is required: the destructor asserts the
+        // queue is empty, and this path previously returned without draining it.
+        disconnectpool.clear();
         return;
     }
 
@@ -420,6 +425,45 @@ void Chainstate::MaybeUpdateMempoolForReorg(
     m_mempool->removeForReorg(m_chain, filter_final_and_mature);
     // Re-limit mempool size, in case we added any transactions
     LimitMempoolSize(*m_mempool, this->CoinsTip());
+}
+
+void Chainstate::RefreshMempoolAfterNextBlockActivation(const CBlockIndex* old_tip)
+{
+    if (!m_mempool) return;
+
+    AssertLockHeld(cs_main);
+    AssertLockHeld(m_mempool->cs);
+
+    const Consensus::Params& consensus{m_chainman.GetConsensus()};
+    const int old_tip_height{old_tip ? old_tip->nHeight : -1};
+    const int new_tip_height{m_chain.Height()};
+    const bool witness_scale_changed{IsWitnessDiscountScaleChangedAcrossTips(consensus, old_tip_height, new_tip_height)};
+    const bool pq_sigops_changed{IsPQSigopsActivationChangedAcrossTips(consensus, old_tip_height, new_tip_height)};
+    if (!witness_scale_changed && !pq_sigops_changed) return;
+
+    LogPrintf("Next-block PQ policy changed (old_next_height=%d new_next_height=%d witness_scale=%d pq_sigops=%d mempool=%u)\n",
+              old_tip_height + 1, new_tip_height + 1, witness_scale_changed, pq_sigops_changed,
+              static_cast<unsigned>(m_mempool->size()));
+    if (m_mempool->size() == 0) return;
+
+    std::vector<CTransactionRef> txs;
+    txs.reserve(m_mempool->size());
+    // infoAll walks entries in ancestor order, so parents are reaccepted first.
+    for (const TxMempoolInfo& info : m_mempool->infoAll()) {
+        if (info.tx) txs.push_back(info.tx);
+    }
+
+    m_mempool->removeForReorg(m_chain, [](CTxMemPool::txiter) { return true; });
+
+    for (const CTransactionRef& tx : txs) {
+        if (tx->IsCoinBase()) continue;
+        const MempoolAcceptResult result{AcceptToMemoryPool(*this, tx, GetTime(),
+                                                            /*bypass_limits=*/false, /*test_accept=*/false)};
+        if (result.m_result_type != MempoolAcceptResult::ResultType::VALID) {
+            LogPrintf("Dropped %s while refreshing mempool across activation: %s\n",
+                      tx->GetHash().ToString(), result.m_state.ToString());
+        }
+    }
 }
 
 /**
@@ -827,8 +871,18 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     const CBlockIndex* pre_tip{m_active_chainstate.m_chain.Tip()};
     const int pre_next_h{pre_tip ? pre_tip->nHeight + 1 : 0};
     const int pre_wscale{GetWitnessDiscountScale(pre_consensus, pre_next_h)};
-    if (m_pool.m_opts.require_standard && !IsStandardTx(tx, m_pool.m_opts.max_datacarrier_bytes, m_pool.m_opts.permit_bare_multisig, m_pool.m_opts.dust_relay_feerate, reason, pre_wscale)) {
+    if (m_pool.m_opts.require_standard && !IsStandardTxExceptWeight(tx, m_pool.m_opts.max_datacarrier_bytes, m_pool.m_opts.permit_bare_multisig, m_pool.m_opts.dust_relay_feerate, reason)) {
         return state.Invalid(TxValidationResult::TX_NOT_STANDARD, reason);
+    }
+    const int64_t pre_weight{GetTransactionWeightWithScale(tx, pre_wscale)};
+    // Only a tx whose sole standardness miss is the ordinary weight cap may
+    // continue far enough for the migration classifier to see its prevouts.
+    bool migration_weight_candidate{false};
+    if (m_pool.m_opts.require_standard && pre_weight > MAX_STANDARD_TX_WEIGHT) {
+        if (pre_weight > MIGRATION_MAX_STANDARD_WEIGHT) {
+            return state.Invalid(TxValidationResult::TX_NOT_STANDARD, "tx-size");
+        }
+        migration_weight_candidate = true;
     }
 
     // Transactions smaller than 65 non-witness bytes are not relayed to mitigate CVE-2017-12842.
@@ -924,6 +978,12 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // Check for non-standard witnesses.
     if (tx.HasWitness() && m_pool.m_opts.require_standard && !IsWitnessStandard(tx, m_view)) {
         return state.Invalid(TxValidationResult::TX_WITNESS_MUTATED, "bad-witness-nonstandard");
+    }
+
+    if (migration_weight_candidate) {
+        if (!IsQualifyingLegacyMigration(tx, m_view, pre_next_h, m_active_chainstate.m_chainman.GetConsensus())) {
+            return state.Invalid(TxValidationResult::TX_NOT_STANDARD, "tx-size");
+        }
     }
 
     int64_t nSigOpsCost = GetTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS, pq_sigops_active);
@@ -3483,6 +3543,10 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex*
         // any disconnected transactions back to the mempool.
         MaybeUpdateMempoolForReorg(disconnectpool, true, pindexOldTip);
     }
+    // A normal connect does not disconnect blocks, so the reorg path above does
+    // not run. Entries accepted before PQ witness k or PQ sigops flipped would
+    // otherwise keep those cached values while this tip builds the next block.
+    RefreshMempoolAfterNextBlockActivation(pindexOldTip);
     if (m_mempool) m_mempool->check(this->CoinsTip(), this->m_chain.Height() + 1);
 
     CheckForkWarningConditions();

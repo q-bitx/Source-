@@ -911,8 +911,12 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             # Wait for RPC connections to be ready
             cache_node.wait_for_rpc_connection()
 
-            # Set a time in the past, so that blocks don't end up in the future
-            cache_node.setmocktime(cache_node.getblockheader(cache_node.getbestblockhash())['time'])
+            # Set a time in the past, so that blocks don't end up in the future.
+            # Q-BitX LWMA retargets from height 1 and does not honor
+            # fPowNoRetargeting, so each cache block must be 150 seconds apart
+            # or the difficulty becomes unmineable.
+            mock_time = cache_node.getblockheader(cache_node.getbestblockhash())['time']
+            cache_node.setmocktime(mock_time)
 
             # Create a 199-block-long chain; each of the 3 first nodes
             # gets 25 mature blocks and 25 immature.
@@ -923,11 +927,15 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             gen_addresses = [k.address for k in TestNode.PRIV_KEYS][:3] + [create_deterministic_address_bcrt1_p2tr_op_true()[0]]
             assert_equal(len(gen_addresses), 4)
             for i in range(8):
-                self.generatetoaddress(
-                    cache_node,
-                    nblocks=25 if i != 7 else 24,
-                    address=gen_addresses[i % len(gen_addresses)],
-                )
+                nblocks = 25 if i != 7 else 24
+                for _ in range(nblocks):
+                    mock_time += 150
+                    cache_node.setmocktime(mock_time)
+                    self.generatetoaddress(
+                        cache_node,
+                        nblocks=1,
+                        address=gen_addresses[i % len(gen_addresses)],
+                    )
 
             assert_equal(cache_node.getblockchaininfo()["blocks"], 199)
 

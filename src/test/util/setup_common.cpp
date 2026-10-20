@@ -11,7 +11,10 @@
 #include <consensus/consensus.h>
 #include <consensus/params.h>
 #include <consensus/validation.h>
+#include <crypto/dilithium_wrapper.h>
 #include <crypto/sha256.h>
+#include <hash.h>
+#include <script/interpreter.h>
 #include <init.h>
 #include <init/common.h>
 #include <interfaces/chain.h>
@@ -98,7 +101,7 @@ static NetworkSetup g_networksetup_instance;
 
 void SetupCommonTestArgs(ArgsManager& argsman)
 {
-    argsman.AddArg("-testdatadir", strprintf("Custom data directory (default: %s<random_string>)", fs::PathToString(fs::temp_directory_path() / TEST_DIR_PATH_ELEMENT / "")),
+    argsman.AddArg("-testdatadir", strprintf("Custom data directory (default: %s<random_string>)", PathToString(fs::temp_directory_path() / TEST_DIR_PATH_ELEMENT / "")),
                    ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST);
 }
 
@@ -162,13 +165,13 @@ BasicTestingSetup::BasicTestingSetup(const ChainType chainType, TestOpts opts)
         if (root_dir.empty()) ExitFailure("-testdatadir argument is empty, please specify a path");
 
         root_dir = fs::absolute(root_dir);
-        m_path_lock = root_dir / TEST_DIR_PATH_ELEMENT / fs::PathFromString(test_name);
+        m_path_lock = root_dir / TEST_DIR_PATH_ELEMENT / PathFromString(test_name);
         m_path_root = m_path_lock / "datadir";
 
         // Try to obtain the lock; if unsuccessful don't disturb the existing test.
         TryCreateDirectories(m_path_lock);
         if (util::LockDirectory(m_path_lock, ".lock", /*probe_only=*/false) != util::LockResult::Success) {
-            ExitFailure("Cannot obtain a lock on test data lock directory " + fs::PathToString(m_path_lock) + '\n' + "The test executable is probably already running.");
+            ExitFailure("Cannot obtain a lock on test data lock directory " + PathToString(m_path_lock) + '\n' + "The test executable is probably already running.");
         }
 
         // Always start with a fresh data directory; this doesn't delete the .lock file located one level above.
@@ -178,8 +181,8 @@ BasicTestingSetup::BasicTestingSetup(const ChainType chainType, TestOpts opts)
         // Print the test directory name if custom.
         std::cout << "Test directory (will not be deleted): " << m_path_root << std::endl;
     }
-    m_args.ForceSetArg("-datadir", fs::PathToString(m_path_root));
-    gArgs.ForceSetArg("-datadir", fs::PathToString(m_path_root));
+    m_args.ForceSetArg("-datadir", PathToString(m_path_root));
+    gArgs.ForceSetArg("-datadir", PathToString(m_path_root));
 
     SelectParams(chainType);
     if (G_TEST_LOG_FUN) LogInstance().PushBackCallback(G_TEST_LOG_FUN);
@@ -287,7 +290,7 @@ ChainTestingSetup::~ChainTestingSetup()
     m_node.netgroupman.reset();
     m_node.args = nullptr;
     m_node.mempool.reset();
-    Assert(!m_node.fee_estimator); // Each test must create a local object, if they wish to use the fee_estimator
+    Assert(!m_node.fee_estimator); // Each test must create a local object, if they wish to use the fee_estimato
     m_node.chainman.reset();
     m_node.validation_signals.reset();
     m_node.scheduler.reset();
@@ -362,24 +365,33 @@ TestChain100Setup::TestChain100Setup(
         {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}};
     coinbaseKey.Set(vchKey.begin(), vchKey.end(), true);
 
+    pqcrypto::dilithium::PQPublicKey pub{};
+    pqcrypto::dilithium::keygen(&pub, &m_coinbase_pq_priv);
+    m_coinbase_pq_pubkey.assign(pub.data, pub.data + pqcrypto::dilithium::PUBKEY_BYTES);
+    m_coinbase_script = CScript() << OP_DUP << OP_HASH160 << ToByteVector(Hash160(m_coinbase_pq_pubkey)) << OP_EQUALVERIFY << OP_CHECKSIGDILITHIUM;
+
     // Generate a 100-block chain:
     this->mineBlocks(COINBASE_MATURITY);
 
     {
         LOCK(::cs_main);
-        assert(
-            m_node.chainman->ActiveChain().Tip()->GetBlockHash().ToString() ==
-            "571d80a9967ae599cec0448b0b0ba1cfb606f584d8069bd7166b86854ba7a191");
+        // The previous assertion locked a Bitcoin regtest hash. Q-BitX genesis
+        // and the PQ coinbase script make that hash unreachable. Height is the
+        // consensus-relevant property of this fixture.
+        assert(m_node.chainman->ActiveChain().Height() == COINBASE_MATURITY);
     }
 }
 
 void TestChain100Setup::mineBlocks(int num_blocks)
 {
-    CScript scriptPubKey = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+    // CheckBlock rejects an ECDSA coinbase (bad-cb-pq). The payout is the
+    // fixture Dilithium P2PKH, which CreateValidTransaction can spend.
     for (int i = 0; i < num_blocks; i++) {
         std::vector<CMutableTransaction> noTxns;
-        CBlock b = CreateAndProcessBlock(noTxns, scriptPubKey);
-        SetMockTime(GetTime() + 1);
+        CBlock b = CreateAndProcessBlock(noTxns, m_coinbase_script);
+        // LWMA retargets every block from height 1 and ignores fPowNoRetargeting.
+        // A 1-second step makes the next target unmineable. Match nPowTargetSpacing.
+        SetMockTime(GetTime() + 150);
         m_coinbase_txns.push_back(b.vtx[0]);
     }
 }
@@ -460,7 +472,23 @@ std::pair<CMutableTransaction, CAmount> TestChain100Setup::CreateValidTransactio
     // - Default signature hashing type
     int nHashType = SIGHASH_ALL;
     std::map<int, bilingual_str> input_errors;
-    assert(SignTransaction(mempool_txn, &keystore, input_coins, nHashType, input_errors));
+    const bool fixture_pq = std::all_of(inputs.begin(), inputs.end(), [&](const COutPoint& outpoint) {
+        const auto coin = input_coins.find(outpoint);
+        return coin != input_coins.end() && coin->second.out.scriptPubKey == m_coinbase_script;
+    });
+    if (fixture_pq) {
+        for (size_t i = 0; i < mempool_txn.vin.size(); ++i) {
+            const Coin& coin = input_coins.at(mempool_txn.vin[i].prevout);
+            const uint256 sighash = SignatureHash(m_coinbase_script, CTransaction(mempool_txn), static_cast<unsigned int>(i), SIGHASH_ALL, coin.out.nValue, SigVersion::BASE);
+            std::vector<unsigned char> msg(sighash.begin(), sighash.end());
+            std::vector<unsigned char> sig;
+            assert(pqcrypto::dilithium::sign(&m_coinbase_pq_priv, msg.data(), msg.size(), sig));
+            sig.push_back(static_cast<unsigned char>(SIGHASH_ALL));
+            mempool_txn.vin[i].scriptSig = CScript() << sig << m_coinbase_pq_pubkey;
+        }
+    } else {
+        assert(SignTransaction(mempool_txn, &keystore, input_coins, nHashType, input_errors));
+    }
     CAmount current_fee = inputs_amount - std::accumulate(outputs.begin(), outputs.end(), CAmount(0),
         [](const CAmount& acc, const CTxOut& out) {
         return acc + out.nValue;
@@ -477,7 +505,19 @@ std::pair<CMutableTransaction, CAmount> TestChain100Setup::CreateValidTransactio
             mempool_txn.vout[fee_output.value()].nValue -= deduction;
             // Re-sign since an output has changed
             input_errors.clear();
-            assert(SignTransaction(mempool_txn, &keystore, input_coins, nHashType, input_errors));
+            if (fixture_pq) {
+                for (size_t i = 0; i < mempool_txn.vin.size(); ++i) {
+                    const Coin& coin = input_coins.at(mempool_txn.vin[i].prevout);
+                    const uint256 sighash = SignatureHash(m_coinbase_script, CTransaction(mempool_txn), static_cast<unsigned int>(i), SIGHASH_ALL, coin.out.nValue, SigVersion::BASE);
+                    std::vector<unsigned char> msg(sighash.begin(), sighash.end());
+                    std::vector<unsigned char> sig;
+                    assert(pqcrypto::dilithium::sign(&m_coinbase_pq_priv, msg.data(), msg.size(), sig));
+                    sig.push_back(static_cast<unsigned char>(SIGHASH_ALL));
+                    mempool_txn.vin[i].scriptSig = CScript() << sig << m_coinbase_pq_pubkey;
+                }
+            } else {
+                assert(SignTransaction(mempool_txn, &keystore, input_coins, nHashType, input_errors));
+            }
             current_fee = target_fee;
         }
     }

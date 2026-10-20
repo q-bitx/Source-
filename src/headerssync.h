@@ -127,6 +127,9 @@ public:
     /** Return the amount of work in the chain received during the PRESYNC phase. */
     arith_uint256 GetPresyncWork() const { return m_current_chain_work; }
 
+    /** Presync commitment cap. A clock behind the chain-start MTP must not wrap this. */
+    uint64_t GetMaxCommitments() const { return m_max_commitments; }
+
     /** Construct a HeadersSyncState object representing a headers sync via this
      *  download-twice mechanism).
      *

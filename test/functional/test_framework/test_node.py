@@ -220,6 +220,11 @@ class TestNode():
         if extra_args is None:
             extra_args = self.extra_args
 
+        # The daemon reads qbitx.conf. The framework writes bitcoin.conf, so
+        # load that file unless the test already chose a config or -noconf.
+        if not any(arg == "-noconf" or arg.startswith("-conf=") or arg.startswith("-noconf") for arg in extra_args):
+            extra_args.append("-conf=bitcoin.conf")
+
         # If listening and no -bind is given, then bitcoind would bind P2P ports on
         # 0.0.0.0:P and 127.0.0.1:P+1 (for incoming Tor connections), where P is
         # a unique port chosen by the test framework and configured as port=P in

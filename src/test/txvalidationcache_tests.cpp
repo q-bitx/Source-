@@ -34,8 +34,6 @@ BOOST_FIXTURE_TEST_CASE(tx_mempool_block_doublespend, Dersig100Setup)
     // validated going into the memory pool does not allow
     // double-spends in blocks to pass validation when they should not.
 
-    CScript scriptPubKey = CScript() <<  ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
-
     const auto ToMemPool = [this](const CMutableTransaction& tx) {
         LOCK(cs_main);
 
@@ -43,31 +41,16 @@ BOOST_FIXTURE_TEST_CASE(tx_mempool_block_doublespend, Dersig100Setup)
         return result.m_result_type == MempoolAcceptResult::ResultType::VALID;
     };
 
-    // Create a double-spend of mature coinbase txn:
+    // Create a double-spend of the mature Dilithium coinbase.
     std::vector<CMutableTransaction> spends;
     spends.resize(2);
-    for (int i = 0; i < 2; i++)
-    {
-        spends[i].version = 1;
-        spends[i].vin.resize(1);
-        spends[i].vin[0].prevout.hash = m_coinbase_txns[0]->GetHash();
-        spends[i].vin[0].prevout.n = 0;
-        spends[i].vout.resize(1);
-        spends[i].vout[0].nValue = 11*CENT;
-        spends[i].vout[0].scriptPubKey = scriptPubKey;
-
-        // Sign:
-        std::vector<unsigned char> vchSig;
-        uint256 hash = SignatureHash(scriptPubKey, spends[i], 0, SIGHASH_ALL, 0, SigVersion::BASE);
-        BOOST_CHECK(coinbaseKey.Sign(hash, vchSig));
-        vchSig.push_back((unsigned char)SIGHASH_ALL);
-        spends[i].vin[0].scriptSig << vchSig;
-    }
+    spends[0] = CreateValidMempoolTransaction(m_coinbase_txns[0], 0, 0, coinbaseKey, m_coinbase_script, 11 * CENT, false);
+    spends[1] = CreateValidMempoolTransaction(m_coinbase_txns[0], 0, 0, coinbaseKey, m_coinbase_script, 10 * CENT, false);
 
     CBlock block;
 
     // Test 1: block with both of those transactions should be rejected.
-    block = CreateAndProcessBlock(spends, scriptPubKey);
+    block = CreateAndProcessBlock(spends, m_coinbase_script);
     {
         LOCK(cs_main);
         BOOST_CHECK(m_node.chainman->ActiveChain().Tip()->GetBlockHash() != block.GetHash());
@@ -75,7 +58,7 @@ BOOST_FIXTURE_TEST_CASE(tx_mempool_block_doublespend, Dersig100Setup)
 
     // Test 2: ... and should be rejected if spend1 is in the memory pool
     BOOST_CHECK(ToMemPool(spends[0]));
-    block = CreateAndProcessBlock(spends, scriptPubKey);
+    block = CreateAndProcessBlock(spends, m_coinbase_script);
     {
         LOCK(cs_main);
         BOOST_CHECK(m_node.chainman->ActiveChain().Tip()->GetBlockHash() != block.GetHash());
@@ -86,7 +69,7 @@ BOOST_FIXTURE_TEST_CASE(tx_mempool_block_doublespend, Dersig100Setup)
 
     // Test 3: ... and should be rejected if spend2 is in the memory pool
     BOOST_CHECK(ToMemPool(spends[1]));
-    block = CreateAndProcessBlock(spends, scriptPubKey);
+    block = CreateAndProcessBlock(spends, m_coinbase_script);
     {
         LOCK(cs_main);
         BOOST_CHECK(m_node.chainman->ActiveChain().Tip()->GetBlockHash() != block.GetHash());
@@ -99,7 +82,7 @@ BOOST_FIXTURE_TEST_CASE(tx_mempool_block_doublespend, Dersig100Setup)
     std::vector<CMutableTransaction> oneSpend;
     oneSpend.push_back(spends[0]);
     BOOST_CHECK(ToMemPool(spends[1]));
-    block = CreateAndProcessBlock(oneSpend, scriptPubKey);
+    block = CreateAndProcessBlock(oneSpend, m_coinbase_script);
     {
         LOCK(cs_main);
         BOOST_CHECK(m_node.chainman->ActiveChain().Tip()->GetBlockHash() == block.GetHash());
@@ -170,7 +153,10 @@ BOOST_FIXTURE_TEST_CASE(checkinputs_test, Dersig100Setup)
     // that we would pass again with a different set of flags.
     CScript p2pk_scriptPubKey = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
     CScript p2sh_scriptPubKey = GetScriptForDestination(ScriptHash(p2pk_scriptPubKey));
-    CScript p2pkh_scriptPubKey = GetScriptForDestination(PKHash(coinbaseKey.GetPubKey()));
+    CScript p2pkh_scriptPubKey = CScript() << OP_DUP << OP_HASH160 << ToByteVector(coinbaseKey.GetPubKey().GetID()) << OP_EQUALVERIFY << OP_CHECKSIG;
+    // The coinbase is Dilithium P2PKH. Fund an ECDSA output before the DERSIG cases.
+    const CMutableTransaction funded = CreateValidMempoolTransaction(m_coinbase_txns[0], 0, 0, coinbaseKey, p2pk_scriptPubKey, 100 * CENT, false);
+    CreateAndProcessBlock({funded}, m_coinbase_script);
     CScript p2wpkh_scriptPubKey = GetScriptForDestination(WitnessV0KeyHash(coinbaseKey.GetPubKey()));
 
     FillableSigningProvider keystore;
@@ -185,7 +171,7 @@ BOOST_FIXTURE_TEST_CASE(checkinputs_test, Dersig100Setup)
 
     spend_tx.version = 1;
     spend_tx.vin.resize(1);
-    spend_tx.vin[0].prevout.hash = m_coinbase_txns[0]->GetHash();
+    spend_tx.vin[0].prevout.hash = funded.GetHash();
     spend_tx.vin[0].prevout.n = 0;
     spend_tx.vout.resize(4);
     spend_tx.vout[0].nValue = 11*CENT;
@@ -236,7 +222,7 @@ BOOST_FIXTURE_TEST_CASE(checkinputs_test, Dersig100Setup)
     // enabled yet), even though there's no cache entry.
     CBlock block;
 
-    block = CreateAndProcessBlock({spend_tx}, p2pk_scriptPubKey);
+    block = CreateAndProcessBlock({spend_tx}, m_coinbase_script);
     LOCK(cs_main);
     BOOST_CHECK(m_node.chainman->ActiveChain().Tip()->GetBlockHash() == block.GetHash());
     BOOST_CHECK(m_node.chainman->ActiveChainstate().CoinsTip().GetBestBlock() == block.GetHash());

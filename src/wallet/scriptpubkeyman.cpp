@@ -2457,6 +2457,7 @@ bool DescriptorScriptPubKeyMan::AddDilithiumKeyWithDB(WalletBatch& batch, const 
             return false;
         }
         m_map_crypted_dilithium_keys[keyid] = std::make_pair(vchPubKey, crypted_secret);
+        m_map_dilithium_pubkeys[keyid] = vchPubKey;
         // Write public key separately for encrypted keys too
         if (!batch.WriteDilithiumPubKey(keyid, vchPubKey)) {
             return false;
@@ -2465,6 +2466,7 @@ bool DescriptorScriptPubKeyMan::AddDilithiumKeyWithDB(WalletBatch& batch, const 
         return batch.WriteCryptedDilithiumKeyByID(keyid, crypted_secret, keyMeta);
     } else {
         m_map_dilithium_keys[keyid] = vchPrivKey;
+        m_map_dilithium_pubkeys[keyid] = vchPubKey;
         // Also write the public key separately so it can be retrieved later
         if (!batch.WriteDilithiumPubKey(keyid, vchPubKey)) {
             return false;
@@ -2506,6 +2508,7 @@ bool DescriptorScriptPubKeyMan::LoadDilithiumKey(const CKeyID& keyid, const std:
     
     // Store the key in memory with the correct keyid
     m_map_dilithium_keys[actual_keyid] = vchPrivKey;
+    m_map_dilithium_pubkeys[actual_keyid] = vchPubKey;
     return true;
 }
 
@@ -2519,6 +2522,7 @@ bool DescriptorScriptPubKeyMan::LoadCryptedDilithiumKey(const CKeyID& keyid, con
     LOCK(cs_desc_man);
     // For descriptor wallets, store the encrypted key in memory
     m_map_crypted_dilithium_keys[keyid] = std::make_pair(vchPubKey, vchCryptedSecret);
+    m_map_dilithium_pubkeys[keyid] = vchPubKey;
     return true;
 }
 
@@ -2587,8 +2591,10 @@ bool DescriptorScriptPubKeyMan::GetDilithiumKeys(const CKeyID& keyid, std::vecto
     DilithiumKeyMap::const_iterator mi = m_map_dilithium_keys.find(keyid);
     if (mi != m_map_dilithium_keys.end()) {
         vchPrivKey = mi->second;
-        // For unencrypted keys in descriptor wallets, public key should be in CWallet::map_dilithium_pub
-        // Return true for private key; caller must retrieve public key separately
+        const auto pub = m_map_dilithium_pubkeys.find(keyid);
+        if (pub != m_map_dilithium_pubkeys.end()) {
+            vchPubKey = pub->second;
+        }
         return true;
     }
     
@@ -3077,6 +3083,12 @@ int32_t DescriptorScriptPubKeyMan::GetEndRange() const
 bool DescriptorScriptPubKeyMan::GetDescriptorString(std::string& out, const bool priv) const
 {
     LOCK(cs_desc_man);
+
+    // Dilithium placeholder managers store PQ keys without a Bitcoin descriptor.
+    // Callers already treat false as "no descriptor string".
+    if (!m_wallet_descriptor.descriptor) {
+        return false;
+    }
 
     FlatSigningProvider provider;
     provider.keys = GetKeys();

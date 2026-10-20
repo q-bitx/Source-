@@ -465,7 +465,7 @@ void Test(const std::string& ms, const std::string& hexscript, int mode, const K
         BOOST_CHECK_MESSAGE(node->NeedsSignature() == !!(mode & TESTMODE_NEEDSIG), "Signature necessity mismatch: " + ms);
         BOOST_CHECK_MESSAGE((node->GetType() << "k"_mst) == !(mode & TESTMODE_TIMELOCKMIX), "Timelock mix mismatch: " + ms);
         auto inferred_miniscript = miniscript::FromScript(computed_script, converter);
-        BOOST_CHECK_MESSAGE(inferred_miniscript, "Cannot infer miniscript from script: " + ms);
+        BOOST_REQUIRE_MESSAGE(inferred_miniscript, "Cannot infer miniscript from script: " + ms);
         BOOST_CHECK_MESSAGE(inferred_miniscript->ToScript(converter) == computed_script, "Roundtrip failure: miniscript->script != miniscript->script->miniscript->script: " + ms);
         if (opslimit != -1) BOOST_CHECK_MESSAGE((int)*node->GetOps() == opslimit, "Ops limit mismatch: " << ms << " (" << *node->GetOps() << " vs " << opslimit << ")");
         if (stacklimit != -1) BOOST_CHECK_MESSAGE((int)*node->GetStackSize() == stacklimit, "Stack limit mismatch: " << ms << " (" << *node->GetStackSize() << " vs " << stacklimit << ")");

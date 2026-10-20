@@ -64,14 +64,18 @@ struct TestSubscriber final : public CValidationInterface {
 std::shared_ptr<CBlock> MinerTestingSetup::Block(const uint256& prev_hash)
 {
     static int i = 0;
-    static uint64_t time = Params().GenesisBlock().nTime;
 
     BlockAssembler::Options options;
-    options.coinbase_output_script = CScript{} << i++ << OP_TRUE;
+    // vout[0] must be PQ P2PKH. Vary the hash so same-height blocks differ.
+    // The spendable value is moved to vout[1] below; this output stays unspent.
+    std::vector<unsigned char> payout_id(20, 0x11);
+    payout_id[0] = static_cast<unsigned char>(i & 0xff);
+    payout_id[1] = static_cast<unsigned char>((i >> 8) & 0xff);
+    ++i;
+    options.coinbase_output_script = CScript() << OP_DUP << OP_HASH160 << payout_id << OP_EQUALVERIFY << OP_CHECKSIGDILITHIUM;
     auto ptemplate = BlockAssembler{m_node.chainman->ActiveChainstate(), m_node.mempool.get(), options}.CreateNewBlock();
     auto pblock = std::make_shared<CBlock>(ptemplate->block);
     pblock->hashPrevBlock = prev_hash;
-    pblock->nTime = ++time;
 
     // Make the coinbase transaction with two outputs:
     // One zero-value one that has a unique pubkey to make sure that blocks at the same height can have a different hash
@@ -81,6 +85,7 @@ std::shared_ptr<CBlock> MinerTestingSetup::Block(const uint256& prev_hash)
     txCoinbase.vout[1].scriptPubKey = P2WSH_OP_TRUE;
     txCoinbase.vout[1].nValue = txCoinbase.vout[0].nValue;
     txCoinbase.vout[0].nValue = 0;
+    // Leave vout[0].scriptPubKey as the PQ P2PKH from the template.
     txCoinbase.vin[0].scriptWitness.SetNull();
     // Always pad with OP_0 at the end to avoid bad-cb-length error
     txCoinbase.vin[0].scriptSig = CScript{} << WITH_LOCK(::cs_main, return m_node.chainman->m_blockman.LookupBlockIndex(prev_hash)->nHeight + 1) << OP_0;
@@ -92,6 +97,10 @@ std::shared_ptr<CBlock> MinerTestingSetup::Block(const uint256& prev_hash)
 std::shared_ptr<CBlock> MinerTestingSetup::FinalizeBlock(std::shared_ptr<CBlock> pblock)
 {
     const CBlockIndex* prev_block{WITH_LOCK(::cs_main, return m_node.chainman->m_blockman.LookupBlockIndex(pblock->hashPrevBlock))};
+    // LWMA rejects the historical genesis-clock timestamps. Keep one target
+    // spacing after the parent and recompute nBits for that parent.
+    pblock->nTime = prev_block->nTime + 150;
+    pblock->nBits = GetNextWorkRequired(prev_block, pblock.get(), Params().GetConsensus());
     m_node.chainman->GenerateCoinbaseCommitment(*pblock, prev_block);
 
     pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
@@ -330,10 +339,9 @@ BOOST_AUTO_TEST_CASE(mempool_locks_reorg)
 BOOST_AUTO_TEST_CASE(witness_commitment_index)
 {
     LOCK(Assert(m_node.chainman)->GetMutex());
-    CScript pubKey;
-    pubKey << 1 << OP_TRUE;
+    const std::vector<unsigned char> payout_id(20, 0x44);
     BlockAssembler::Options options;
-    options.coinbase_output_script = pubKey;
+    options.coinbase_output_script = CScript() << OP_DUP << OP_HASH160 << payout_id << OP_EQUALVERIFY << OP_CHECKSIGDILITHIUM;
     auto ptemplate = BlockAssembler{m_node.chainman->ActiveChainstate(), m_node.mempool.get(), options}.CreateNewBlock();
     CBlock pblock = ptemplate->block;
 
@@ -413,8 +421,12 @@ BOOST_AUTO_TEST_CASE(coinbase_must_be_pq)
     std::vector<unsigned char> legacy_hash(20, 0x43);
     CScript invalid_legacy_coinbase = CScript() << OP_DUP << OP_HASH160 << legacy_hash << OP_EQUALVERIFY << OP_CHECKSIG;
     
-    // Create a block with invalid legacy coinbase
+    // Create a block with invalid legacy coinbase.
+    // CreateNewBlock self-checks the template and would throw bad-cb-pq
+    // before this case can assert the consensus reject reason. Skip that
+    // self-check here; CheckBlock below is the assertion.
     BlockAssembler::Options invalid_options;
+    invalid_options.test_block_validity = false;
     invalid_options.coinbase_output_script = invalid_legacy_coinbase;
     auto invalid_template = BlockAssembler{m_node.chainman->ActiveChainstate(), m_node.mempool.get(), invalid_options}.CreateNewBlock();
     CBlock invalid_block = invalid_template->block;
@@ -446,5 +458,37 @@ BOOST_AUTO_TEST_CASE(coinbase_must_be_pq)
     BOOST_CHECK(!invalid_state.IsValid());
     BOOST_CHECK_EQUAL(invalid_state.GetRejectReason(), "bad-cb-pq");
     BOOST_CHECK(invalid_state.GetDebugMessage().find("coinbase must pay to PQ address") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(reorg_across_regtest_pq_activation_drains_disconnectpool)
+{
+    // Regtest: PQ sigops at 1, block limits at 5, PQ witness at 10.
+    // InvalidateBlock from above those heights disconnects one block at a time.
+    // The step that straddles an activation used to leave DisconnectedBlockTransactions
+    // non-empty, and the destructor aborted on queuedTx.empty().
+    const auto& params = Params().GetConsensus();
+    BOOST_REQUIRE_EQUAL(params.nPQSigopsHeight, 1);
+    BOOST_REQUIRE_EQUAL(params.nBlockLimitsUpgradeHeight, 5);
+    BOOST_REQUIRE_EQUAL(params.nPQWitnessHeight, 10);
+
+    uint256 prev{m_node.chainman->ActiveChain().Genesis()->GetBlockHash()};
+    std::vector<uint256> hashes;
+    hashes.reserve(12);
+    for (int i = 0; i < 12; ++i) {
+        std::shared_ptr<const CBlock> block = GoodBlock(prev);
+        bool processed = Assert(m_node.chainman)->ProcessNewBlock(block, true, true, nullptr);
+        BOOST_REQUIRE(processed);
+        prev = block->GetHash();
+        hashes.push_back(prev);
+    }
+    BOOST_REQUIRE_EQUAL(WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Height()), 12);
+
+    CBlockIndex* cross = WITH_LOCK(cs_main, return m_node.chainman->m_blockman.LookupBlockIndex(hashes[3]));
+    BOOST_REQUIRE(cross != nullptr);
+    BOOST_REQUIRE_EQUAL(cross->nHeight, 4);
+
+    BlockValidationState state;
+    BOOST_REQUIRE(m_node.chainman->ActiveChainstate().InvalidateBlock(state, cross));
+    BOOST_CHECK_EQUAL(WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Height()), 3);
 }
 BOOST_AUTO_TEST_SUITE_END()

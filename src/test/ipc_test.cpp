@@ -33,13 +33,13 @@ public:
 //! Generate a temporary path with temp_directory_path and mkstemp
 static std::string TempPath(std::string_view pattern)
 {
-    std::string temp{fs::PathToString(fs::path{fs::temp_directory_path()} / fs::PathFromString(std::string{pattern}))};
+    std::string temp{PathToString(fs::path{fs::temp_directory_path()} / PathFromString(std::string{pattern}))};
     temp.push_back('\0');
     int fd{mkstemp(temp.data())};
     BOOST_CHECK_GE(fd, 0);
     BOOST_CHECK_EQUAL(close(fd), 0);
     temp.resize(temp.size() - 1);
-    fs::remove(fs::PathFromString(temp));
+    fs::remove(PathFromString(temp));
     return temp;
 }
 

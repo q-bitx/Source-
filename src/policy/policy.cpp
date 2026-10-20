@@ -20,6 +20,8 @@
 #include <span.h>
 
 #include <crypto/dilithium.h>
+#include <consensus/params.h>
+#include <script/pq_script.h>
 #include <algorithm>
 #include <cstddef>
 #include <vector>
@@ -107,8 +109,7 @@ bool IsStandard(const CScript& scriptPubKey, const std::optional<unsigned>& max_
 
 bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason, int witness_discount_scale)
 {
-    if (tx.version > TX_MAX_STANDARD_VERSION || tx.version < 1) {
-        reason = "version";
+    if (!IsStandardTxExceptWeight(tx, max_datacarrier_bytes, permit_bare_multisig, dust_relay_fee, reason)) {
         return false;
     }
 
@@ -119,6 +120,15 @@ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_dat
     const unsigned int sz = static_cast<unsigned int>(GetTransactionWeightWithScale(tx, witness_discount_scale));
     if (sz > MAX_STANDARD_TX_WEIGHT) {
         reason = "tx-size";
+        return false;
+    }
+    return true;
+}
+
+bool IsStandardTxExceptWeight(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason)
+{
+    if (tx.version > TX_MAX_STANDARD_VERSION || tx.version < 1) {
+        reason = "version";
         return false;
     }
 
@@ -325,4 +335,23 @@ int64_t GetVirtualTransactionSize(const CTransaction& tx, int64_t nSigOpCost, un
 int64_t GetVirtualTransactionInputSize(const CTxIn& txin, int64_t nSigOpCost, unsigned int bytes_per_sigop, int witness_discount_scale)
 {
     return GetVirtualTransactionSize(GetTransactionInputWeightWithScale(txin, witness_discount_scale), nSigOpCost, bytes_per_sigop, witness_discount_scale);
+}
+
+bool IsQualifyingLegacyMigration(const CTransaction& tx, const CCoinsViewCache& view, int next_height, const Consensus::Params& params)
+{
+    // Permanent after PQ witness activation. Legacy coins stay spendable under
+    // the ordinary 400000 limit as well; this only classifies the larger exception.
+    if (!Consensus::IsPQWitnessEnabled(params, next_height)) return false;
+    if (tx.vin.empty() || tx.vout.empty()) return false;
+
+    for (const CTxIn& txin : tx.vin) {
+        if (!txin.scriptWitness.IsNull()) return false;
+        const Coin& coin{view.AccessCoin(txin.prevout)};
+        if (coin.IsSpent()) return false;
+        if (!IsPQPayToPubKeyHash(coin.out.scriptPubKey)) return false;
+    }
+    for (const CTxOut& txout : tx.vout) {
+        if (!IsNativePQWitnessProgram(txout.scriptPubKey)) return false;
+    }
+    return true;
 }

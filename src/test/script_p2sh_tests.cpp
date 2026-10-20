@@ -55,6 +55,13 @@ static bool Verify(const CScript& scriptSig, const CScript& scriptPubKey, bool f
 }
 
 
+// PKHash is a Dilithium script. These vectors sign an ECDSA key, so the
+// pubkey-hash form is the OP_CHECKSIG script that key can spend.
+static CScript EcdsaP2PKH(const CPubKey& pubkey)
+{
+    return CScript() << OP_DUP << OP_HASH160 << ToByteVector(pubkey.GetID()) << OP_EQUALVERIFY << OP_CHECKSIG;
+}
+
 BOOST_FIXTURE_TEST_SUITE(script_p2sh_tests, BasicTestingSetup)
 
 BOOST_AUTO_TEST_CASE(sign)
@@ -76,9 +83,9 @@ BOOST_AUTO_TEST_CASE(sign)
     // different keys, straight/P2SH, pubkey/pubkeyhash
     CScript standardScripts[4];
     standardScripts[0] << ToByteVector(key[0].GetPubKey()) << OP_CHECKSIG;
-    standardScripts[1] = GetScriptForDestination(PKHash(key[1].GetPubKey()));
+    standardScripts[1] = EcdsaP2PKH(key[1].GetPubKey());
     standardScripts[2] << ToByteVector(key[1].GetPubKey()) << OP_CHECKSIG;
-    standardScripts[3] = GetScriptForDestination(PKHash(key[2].GetPubKey()));
+    standardScripts[3] = EcdsaP2PKH(key[2].GetPubKey());
     CScript evalScripts[4];
     for (int i = 0; i < 4; i++)
     {
@@ -173,7 +180,7 @@ BOOST_AUTO_TEST_CASE(set)
     }
 
     CScript inner[4];
-    inner[0] = GetScriptForDestination(PKHash(key[0].GetPubKey()));
+    inner[0] = EcdsaP2PKH(key[0].GetPubKey());
     inner[1] = GetScriptForMultisig(2, std::vector<CPubKey>(keys.begin(), keys.begin()+2));
     inner[2] = GetScriptForMultisig(1, std::vector<CPubKey>(keys.begin(), keys.begin()+2));
     inner[3] = GetScriptForMultisig(2, std::vector<CPubKey>(keys.begin(), keys.begin()+3));
@@ -295,7 +302,7 @@ BOOST_AUTO_TEST_CASE(AreInputsStandard)
     txFrom.vout.resize(7);
 
     // First three are standard:
-    CScript pay1 = GetScriptForDestination(PKHash(key[0].GetPubKey()));
+    CScript pay1 = EcdsaP2PKH(key[0].GetPubKey());
     BOOST_CHECK(keystore.AddCScript(pay1));
     CScript pay1of3 = GetScriptForMultisig(1, keys);
 
@@ -340,7 +347,7 @@ BOOST_AUTO_TEST_CASE(AreInputsStandard)
 
     CMutableTransaction txTo;
     txTo.vout.resize(1);
-    txTo.vout[0].scriptPubKey = GetScriptForDestination(PKHash(key[1].GetPubKey()));
+    txTo.vout[0].scriptPubKey = EcdsaP2PKH(key[1].GetPubKey());
 
     txTo.vin.resize(5);
     for (int i = 0; i < 5; i++)
@@ -366,7 +373,7 @@ BOOST_AUTO_TEST_CASE(AreInputsStandard)
 
     CMutableTransaction txToNonStd1;
     txToNonStd1.vout.resize(1);
-    txToNonStd1.vout[0].scriptPubKey = GetScriptForDestination(PKHash(key[1].GetPubKey()));
+    txToNonStd1.vout[0].scriptPubKey = EcdsaP2PKH(key[1].GetPubKey());
     txToNonStd1.vout[0].nValue = 1000;
     txToNonStd1.vin.resize(1);
     txToNonStd1.vin[0].prevout.n = 5;
@@ -378,7 +385,7 @@ BOOST_AUTO_TEST_CASE(AreInputsStandard)
 
     CMutableTransaction txToNonStd2;
     txToNonStd2.vout.resize(1);
-    txToNonStd2.vout[0].scriptPubKey = GetScriptForDestination(PKHash(key[1].GetPubKey()));
+    txToNonStd2.vout[0].scriptPubKey = EcdsaP2PKH(key[1].GetPubKey());
     txToNonStd2.vout[0].nValue = 1000;
     txToNonStd2.vin.resize(1);
     txToNonStd2.vin[0].prevout.n = 6;

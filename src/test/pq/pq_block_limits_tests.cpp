@@ -124,4 +124,47 @@ BOOST_AUTO_TEST_CASE(block_limits_reorg_detection)
     BOOST_CHECK(IsBlockLimitsUpgradeChangedAcrossTips(p, 219999, 219998));
 }
 
+BOOST_AUTO_TEST_CASE(tx_count_compactsize_and_coinbase_scriptsig_width)
+{
+    // Lengths 2..100 never cross the CompactSize step at 253.
+    BOOST_CHECK_EQUAL(GetSizeOfCompactSize(2), 1);
+    BOOST_CHECK_EQUAL(GetSizeOfCompactSize(100), 1);
+    BOOST_CHECK_EQUAL(GetSizeOfCompactSize(252), 1);
+    BOOST_CHECK_EQUAL(GetSizeOfCompactSize(253), 3);
+
+    CMutableTransaction tiny;
+    tiny.vin.resize(1);
+    tiny.vin[0].prevout.SetNull();
+    tiny.vin[0].scriptSig = CScript() << OP_0 << OP_0;
+    tiny.vout.resize(1);
+    tiny.vout[0].scriptPubKey = CScript() << OP_TRUE;
+    const CTransactionRef tx{MakeTransactionRef(tiny)};
+
+    auto block_bytes = [&](size_t n) {
+        CBlock block;
+        block.vtx.assign(n, tx);
+        return ::GetSerializeSize(TX_WITH_WITNESS(block));
+    };
+    const size_t at_252{block_bytes(252)};
+    const size_t at_253{block_bytes(253)};
+    BOOST_CHECK_EQUAL(at_252, 80 + GetSizeOfCompactSize(252) + 252 * tx->GetTotalSize());
+    BOOST_CHECK_EQUAL(at_253, 80 + GetSizeOfCompactSize(253) + 253 * tx->GetTotalSize());
+    // One extra transaction, plus the tx-count CompactSize growing from 1 byte to 3.
+    BOOST_CHECK_EQUAL(at_253 - at_252, tx->GetTotalSize() + 2);
+
+    CMutableTransaction short_cb;
+    short_cb.vin.resize(1);
+    short_cb.vin[0].prevout.SetNull();
+    short_cb.vin[0].scriptSig = CScript() << static_cast<int64_t>(230000) << OP_0;
+    short_cb.vout.resize(1);
+    short_cb.vout[0].scriptPubKey = CScript() << OP_TRUE;
+    CMutableTransaction max_cb = short_cb;
+    max_cb.vin[0].scriptSig = short_cb.vin[0].scriptSig;
+    max_cb.vin[0].scriptSig.resize(100);
+    const size_t short_len{short_cb.vin[0].scriptSig.size()};
+    BOOST_CHECK_LT(short_len, 100U);
+    BOOST_CHECK_EQUAL(MakeTransactionRef(max_cb)->GetTotalSize() - MakeTransactionRef(short_cb)->GetTotalSize(),
+                      100 - short_len);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
