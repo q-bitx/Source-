@@ -7,6 +7,8 @@
 
 #include <script/script.h>
 
+namespace Consensus { struct Params; }
+
 /**
  * Check if a script matches the Q-BitX PQ P2PKH format.
  * Required format: OP_DUP OP_HASH160 <20-byte-hash> OP_EQUALVERIFY OP_CHECKSIGDILITHIUM
@@ -26,5 +28,8 @@ bool IsPQPayToPubKeyHash(const CScript& script);
 
 /** Native PQ witness keyhash: OP_2 <20-byte program>. */
 bool IsNativePQWitnessProgram(const CScript& script);
+
+/** Height-aware coinbase policy, shared by consensus and mining RPCs. */
+bool IsPQCoinbaseScript(const CScript& script, const Consensus::Params& params, int height);
 
 #endif // BITCOIN_SCRIPT_PQ_SCRIPT_H

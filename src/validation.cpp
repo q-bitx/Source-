@@ -4211,7 +4211,8 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
     uint256 block_hash = block.GetHash();
     if (block_hash != consensusParams.hashGenesisBlock) {
         // For all blocks after genesis (height >= 1), enforce PQ coinbase
-        if (block.vtx[0]->vout.empty() || !IsPQPayToPubKeyHash(block.vtx[0]->vout[0].scriptPubKey)) {
+        if (block.vtx[0]->vout.empty() || (!IsPQPayToPubKeyHash(block.vtx[0]->vout[0].scriptPubKey) &&
+             !IsNativePQWitnessProgram(block.vtx[0]->vout[0].scriptPubKey))) {
             return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-pq", "coinbase must pay to PQ address");
         }
     }
@@ -4402,6 +4403,12 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
 static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& state, const ChainstateManager& chainman, const CBlockIndex* pindexPrev)
 {
     const int nHeight = pindexPrev == nullptr ? 0 : pindexPrev->nHeight + 1;
+
+    // Activation is contextual: CheckBlock has no trusted block height.
+    if (nHeight > 0 && !IsPQCoinbaseScript(block.vtx[0]->vout[0].scriptPubKey,
+                                         chainman.GetParams().GetConsensus(), nHeight)) {
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-pq", "coinbase must pay to an active PQ format");
+    }
 
     // Enforce BIP113 (Median Time Past).
     bool enforce_locktime_median_time_past{false};

@@ -214,7 +214,7 @@ static bool GetPQCoinbaseScriptFromArgs(const ChainstateManager& chainman, CScri
         if (!getScriptFromDescriptor(miner_descriptor, script, error)) {
             return false;
         }
-        if (!IsPQPayToPubKeyHash(script)) {
+        if (!IsPQCoinbaseScript(script, chainman.GetParams().GetConsensus(), WITH_LOCK(cs_main, return chainman.ActiveChain().Height() + 1))) {
             error = "Coinbase must use PQ address (descriptor resolves to non-PQ script)";
             return false;
         }
@@ -230,7 +230,7 @@ static bool GetPQCoinbaseScriptFromArgs(const ChainstateManager& chainman, CScri
             return false;
         }
         script = GetScriptForDestination(destination);
-        if (!IsPQPayToPubKeyHash(script)) {
+        if (!IsPQCoinbaseScript(script, chainman.GetParams().GetConsensus(), WITH_LOCK(cs_main, return chainman.ActiveChain().Height() + 1))) {
             error = "Coinbase must use PQ address (-mineraddress is not a PQ address)";
             return false;
         }
@@ -330,7 +330,7 @@ static RPCHelpMan generatetodescriptor()
     }
 
     // Q-BitX RPC policy: coinbase must use PQ address
-    if (!IsPQPayToPubKeyHash(coinbase_output_script)) {
+    if (!IsPQCoinbaseScript(coinbase_output_script, chainman.GetParams().GetConsensus(), WITH_LOCK(cs_main, return chainman.ActiveChain().Height() + 1))) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Coinbase must use PQ address");
     }
 
@@ -403,11 +403,16 @@ static RPCHelpMan qmine()
                 auto pwallet = wallet::GetDefaultWallet(wallet_context, wallet_count);
                 if (pwallet && wallet_count == 1) {
                     // Get a new address from wallet
+                    const int height = WITH_LOCK(cs_main, return chainman.ActiveChain().Height() + 1);
                     LOCK(pwallet->cs_wallet);
                     if (!pwallet->CanGetAddresses()) {
                         throw JSONRPCError(RPC_WALLET_ERROR, "Wallet has no available keys");
                     }
-                    auto op_dest = pwallet->GetNewDestination(OutputType::BECH32, "");
+                    const auto& consensus = chainman.GetParams().GetConsensus();
+                    const OutputType type = height >= consensus.nPQNativeCoinbaseHeight &&
+                                            Consensus::IsPQWitnessEnabled(consensus, height)
+                        ? OutputType::DILITHIUM_BECH32 : OutputType::DILITHIUM_LEGACY;
+                    auto op_dest = pwallet->GetNewDestination(type, "");
                     if (!op_dest) {
                         throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "Error: Keypool ran out");
                     }
@@ -441,7 +446,7 @@ static RPCHelpMan qmine()
             }
 
             // Q-BitX RPC policy: coinbase must use PQ address
-            if (!IsPQPayToPubKeyHash(coinbase_output_script)) {
+            if (!IsPQCoinbaseScript(coinbase_output_script, chainman.GetParams().GetConsensus(), WITH_LOCK(cs_main, return chainman.ActiveChain().Height() + 1))) {
                 throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Coinbase must use PQ address");
             }
 
@@ -522,7 +527,7 @@ static RPCHelpMan generatetoaddress()
             CScript coinbase_output_script = GetScriptForDestination(destination);
 
             // Q-BitX RPC policy: coinbase must use PQ address
-            if (!IsPQPayToPubKeyHash(coinbase_output_script)) {
+            if (!IsPQCoinbaseScript(coinbase_output_script, chainman.GetParams().GetConsensus(), WITH_LOCK(cs_main, return chainman.ActiveChain().Height() + 1))) {
                 throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Coinbase must use PQ address");
             }
 
@@ -579,7 +584,7 @@ static RPCHelpMan generateblock()
     }
 
     // Q-BitX RPC policy: coinbase must use PQ address
-    if (!IsPQPayToPubKeyHash(coinbase_output_script)) {
+    if (!IsPQCoinbaseScript(coinbase_output_script, chainman.GetParams().GetConsensus(), WITH_LOCK(cs_main, return chainman.ActiveChain().Height() + 1))) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Coinbase must use PQ address");
     }
     Mining& miner = EnsureMining(node);

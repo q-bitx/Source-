@@ -130,6 +130,8 @@ struct Params {
     int nPQSigopsHeight{std::numeric_limits<int>::max()};
     /** Native Dilithium PQ witness (SCRIPT_VERIFY_PQ_WITNESS) and BTQ-style k=16 witness discount for block/tx weight */
     int nPQWitnessHeight{std::numeric_limits<int>::max()};
+    /** Native PQ coinbase activation. INT_MAX disables it on networks without an assigned height. */
+    int nPQNativeCoinbaseHeight{std::numeric_limits<int>::max()};
     /** BTQ-aligned 8M weight / 8MB serialized block limits activate at this height (QBX_BLOCK_LIMITS_UPGRADE_HEIGHT). */
     int nBlockLimitsUpgradeHeight{std::numeric_limits<int>::max()};
     /** LWMA window size (number of prior inter-block intervals) */

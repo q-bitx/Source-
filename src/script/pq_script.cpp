@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <script/pq_script.h>
+#include <consensus/params.h>
 #include <script/opcodes.h>
 #include <script/solver.h>
 
@@ -37,4 +38,12 @@ bool IsPQPayToPubKeyHash(const CScript& script)
 bool IsNativePQWitnessProgram(const CScript& script)
 {
     return script.size() == 22 && script[0] == OP_2 && script[1] == 20;
+}
+
+bool IsPQCoinbaseScript(const CScript& script, const Consensus::Params& params, int height)
+{
+    return IsPQPayToPubKeyHash(script) ||
+           (params.nPQNativeCoinbaseHeight != std::numeric_limits<int>::max() &&
+            height >= params.nPQNativeCoinbaseHeight && Consensus::IsPQWitnessEnabled(params, height) &&
+            IsNativePQWitnessProgram(script));
 }

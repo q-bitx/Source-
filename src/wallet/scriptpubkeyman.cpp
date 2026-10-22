@@ -2742,6 +2742,9 @@ std::unique_ptr<FlatSigningProvider> DescriptorScriptPubKeyMan::GetSigningProvid
         }
     }
 
+    // Descriptor-less PQ managers cannot provide keys for other scripts.
+    if (!m_wallet_descriptor.descriptor) return nullptr;
+
     // Find the index of the script
     auto it = m_map_script_pub_keys.find(script);
     if (it != m_map_script_pub_keys.end()) {

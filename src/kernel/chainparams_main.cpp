@@ -113,6 +113,8 @@ public:
         consensus.nPQSigopsHeight = 230000;
         // PQ native witness + k=16 weight discount (see consensus/params.h)
         consensus.nPQWitnessHeight = 230000;
+        // Coordinated native coinbase activation: first block after reported tip 238937.
+        consensus.nPQNativeCoinbaseHeight = 238938;
         // BTQ-aligned 8M weight / 8MB serialized block limits (see QBX_P0_BLOCK_LIMIT_FIX.md)
         consensus.nBlockLimitsUpgradeHeight = 220000;
         consensus.nLWMAWindow = 18;
@@ -544,6 +546,7 @@ public:
         // Regtest PQ heights (defaults for unit/functional tests).
         consensus.nPQSigopsHeight = 1;
         consensus.nPQWitnessHeight = 10;
+        consensus.nPQNativeCoinbaseHeight = 120; // Regtest boundary for native PQ coinbase.
         consensus.nBlockLimitsUpgradeHeight = 5;
         consensus.MinBIP9WarningHeight = 0;
         consensus.powLimit = uint256{"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};

@@ -354,6 +354,10 @@ void CoinsResult::Add(OutputType type, const COutput& out)
 static OutputType GetOutputType(TxoutType type, bool is_from_p2sh)
 {
     switch (type) {
+        case TxoutType::DILITHIUM_PUBKEYHASH:
+            return OutputType::DILITHIUM_LEGACY;
+        case TxoutType::DILITHIUM_WITNESS_V0_KEYHASH:
+            return OutputType::DILITHIUM_BECH32;
         case TxoutType::WITNESS_V0_KEYHASH:
         case TxoutType::WITNESS_V0_SCRIPTHASH:
             if (is_from_p2sh) return OutputType::P2SH_SEGWIT;

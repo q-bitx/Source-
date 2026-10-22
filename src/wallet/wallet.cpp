@@ -33,6 +33,7 @@
 #include <node/types.h>
 #include <outputtype.h>
 #include <policy/feerate.h>
+#include <policy/policy.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <psbt.h>
@@ -1792,8 +1793,10 @@ bool CWallet::IsHDEnabled() const
 bool CWallet::CanGetAddresses(bool internal) const
 {
     LOCK(cs_wallet);
-    // Check Dilithium types directly (they don't use ScriptPubKeyMan)
-    if (!internal && !map_dilithium_priv.empty()) {
+    // PQ receiving and change addresses use the same external key storage.
+    if (!map_dilithium_priv.empty() ||
+        GetScriptPubKeyMan(OutputType::DILITHIUM_LEGACY, /*internal=*/false) ||
+        GetScriptPubKeyMan(OutputType::DILITHIUM_BECH32, /*internal=*/false)) {
         return true;
     }
     if (m_spk_managers.empty()) return false;
@@ -2338,6 +2341,10 @@ bool wallet::CWallet::DilithiumSignTransaction(CMutableTransaction& tx) const
 bool SignPqWalletInputs(const CWallet& wallet, CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, bilingual_str& error)
 {
     AssertLockHeld(wallet.cs_wallet);
+    // Sign standard inputs first; the PQ witness satisfier cannot preserve
+    // manually supplied PQ signatures when another manager lacks their keys.
+    std::map<int, bilingual_str> input_errors;
+    wallet.SignTransaction(tx, coins, SIGHASH_DEFAULT, input_errors);
     const CTransaction tx_for_hash{tx};
     const int32_t hash_type = SIGHASH_ALL;
     for (size_t i = 0; i < tx.vin.size(); ++i) {
@@ -2351,10 +2358,8 @@ bool SignPqWalletInputs(const CWallet& wallet, CMutableTransaction& tx, const st
         std::vector<std::vector<unsigned char>> solutions;
         const TxoutType which = Solver(prevout.scriptPubKey, solutions);
         const bool legacy = !native && which == TxoutType::DILITHIUM_PUBKEYHASH && !solutions.empty() && solutions[0].size() == 20;
-        if (!native && !legacy) {
-            error = Untranslated("Input is not a spendable Dilithium output");
-            return false;
-        }
+        // Other script types were handled by the standard wallet signer above.
+        if (!native && !legacy) continue;
         const std::vector<unsigned char> program = native
             ? std::vector<unsigned char>(prevout.scriptPubKey.begin() + 2, prevout.scriptPubKey.end())
             : solutions[0];
@@ -2411,6 +2416,29 @@ bool SignPqWalletInputs(const CWallet& wallet, CMutableTransaction& tx, const st
             script_sig << signature << pubkey;
             tx.vin[i].scriptSig = script_sig;
             tx.vin[i].scriptWitness.stack.clear();
+        }
+    }
+    // Validate every input after both signing paths, using the same flags
+    // as the standard wallet signer. Never accept a partial transaction.
+    unsigned int flags = STANDARD_SCRIPT_VERIFY_FLAGS;
+    if (wallet.HaveChain()) {
+        if (const auto height = wallet.chain().getHeight();
+            height && Consensus::IsPQWitnessEnabled(Params().GetConsensus(), *height + 1)) {
+            flags |= SCRIPT_VERIFY_PQ_WITNESS;
+        }
+    }
+    const CTransaction signed_tx{tx};
+    std::vector<CTxOut> spent_outputs;
+    for (const auto& input : tx.vin) spent_outputs.push_back(coins.at(input.prevout).out);
+    PrecomputedTransactionData txdata;
+    txdata.Init(signed_tx, std::move(spent_outputs), true);
+    for (size_t i = 0; i < tx.vin.size(); ++i) {
+        const auto& prevout = coins.at(tx.vin[i].prevout).out;
+        ScriptError script_error;
+        if (!VerifyScript(tx.vin[i].scriptSig, prevout.scriptPubKey, &tx.vin[i].scriptWitness, flags,
+                          TransactionSignatureChecker(&signed_tx, i, prevout.nValue, txdata, MissingDataBehavior::FAIL), &script_error)) {
+            error = Untranslated(ScriptErrorString(script_error));
+            return false;
         }
     }
     return true;
@@ -2525,88 +2553,13 @@ SigningResult CWallet::SignMessage(const std::string& message, const PKHash& pkh
 
 OutputType CWallet::TransactionChangeType(const std::optional<OutputType>& change_type, const std::vector<CRecipient>& vecSend) const
 {
-    // If -changetype is specified, always use that change type.
-    if (change_type) {
-        return *change_type;
+    // PQ change is generated through GetNewDestination, independently of
+    // the recipient types and of any existing classic UTXOs being spent.
+    if (change_type) return *change_type;
+    if (HaveChain() && Consensus::IsPQWitnessEnabled(Params().GetConsensus(), chain().getHeight().value_or(-1) + 1)) {
+        return OutputType::DILITHIUM_BECH32;
     }
-
-    // if m_default_address_type is legacy, use legacy address as change.
-    if (m_default_address_type == OutputType::LEGACY) {
-        return OutputType::LEGACY;
-    }
-
-    bool any_tr{false};
-    bool any_wpkh{false};
-    bool any_sh{false};
-    bool any_pkh{false};
-    bool any_dilithium{false};
-
-    for (const auto& recipient : vecSend) {
-        if (std::get_if<WitnessV1Taproot>(&recipient.dest)) {
-            any_tr = true;
-        } else if (std::get_if<WitnessV0KeyHash>(&recipient.dest)) {
-            any_wpkh = true;
-        } else if (std::get_if<ScriptHash>(&recipient.dest)) {
-            any_sh = true;
-        } else if (std::get_if<PKHash>(&recipient.dest)) {
-            any_pkh = true;
-        } else if (std::holds_alternative<DilithiumPKHash>(recipient.dest) ||
-                   std::holds_alternative<DilithiumPubKeyDestination>(recipient.dest) ||
-                   std::holds_alternative<DilithiumScriptHash>(recipient.dest) ||
-                   std::holds_alternative<DilithiumWitnessV0KeyHash>(recipient.dest) ||
-                   std::holds_alternative<DilithiumWitnessV0ScriptHash>(recipient.dest)) {
-            any_dilithium = true;
-        }
-    }
-
-    // A Dilithium payment must not send change to an ECDSA/taproot script.
-    // That change is not spendable by the Dilithium signer.
-    if (any_dilithium) {
-        bool witness_active = false;
-        if (HaveChain()) {
-            if (const std::optional<int> height = chain().getHeight()) {
-                witness_active = Consensus::IsPQWitnessEnabled(Params().GetConsensus(), *height + 1);
-            }
-        }
-        if (witness_active && GetScriptPubKeyMan(OutputType::DILITHIUM_BECH32, /*internal=*/true)) {
-            return OutputType::DILITHIUM_BECH32;
-        }
-        if (GetScriptPubKeyMan(OutputType::DILITHIUM_LEGACY, /*internal=*/true)) {
-            return OutputType::DILITHIUM_LEGACY;
-        }
-        return witness_active ? OutputType::DILITHIUM_BECH32 : OutputType::DILITHIUM_LEGACY;
-    }
-
-    const bool has_bech32m_spkman(GetScriptPubKeyMan(OutputType::BECH32M, /*internal=*/true));
-    if (has_bech32m_spkman && any_tr) {
-        // Currently tr is the only type supported by the BECH32M spkman
-        return OutputType::BECH32M;
-    }
-    const bool has_bech32_spkman(GetScriptPubKeyMan(OutputType::BECH32, /*internal=*/true));
-    if (has_bech32_spkman && any_wpkh) {
-        // Currently wpkh is the only type supported by the BECH32 spkman
-        return OutputType::BECH32;
-    }
-    const bool has_p2sh_segwit_spkman(GetScriptPubKeyMan(OutputType::P2SH_SEGWIT, /*internal=*/true));
-    if (has_p2sh_segwit_spkman && any_sh) {
-        // Currently sh_wpkh is the only type supported by the P2SH_SEGWIT spkman
-        // As of 2021 about 80% of all SH are wrapping WPKH, so use that
-        return OutputType::P2SH_SEGWIT;
-    }
-    const bool has_legacy_spkman(GetScriptPubKeyMan(OutputType::LEGACY, /*internal=*/true));
-    if (has_legacy_spkman && any_pkh) {
-        // Currently pkh is the only type supported by the LEGACY spkman
-        return OutputType::LEGACY;
-    }
-
-    if (has_bech32m_spkman) {
-        return OutputType::BECH32M;
-    }
-    if (has_bech32_spkman) {
-        return OutputType::BECH32;
-    }
-    // else use m_default_address_type for change
-    return m_default_address_type;
+    return OutputType::DILITHIUM_LEGACY;
 }
 
 void CWallet::CommitTransaction(CTransactionRef tx, mapValue_t mapValue, std::vector<std::pair<std::string, std::string>> orderForm)
@@ -2863,6 +2816,14 @@ util::Result<CTxDestination> CWallet::GetNewDestination(const OutputType type, c
 {
     LOCK(cs_wallet);
     
+    if (type != OutputType::DILITHIUM_LEGACY && type != OutputType::DILITHIUM_BECH32) {
+        return util::Error{_("Only Dilithium address generation is supported")};
+    }
+    if (type == OutputType::DILITHIUM_BECH32 &&
+        (!HaveChain() || !Consensus::IsPQWitnessEnabled(Params().GetConsensus(), chain().getHeight().value_or(-1) + 1))) {
+        return util::Error{_("Native Dilithium addresses are not active yet")};
+    }
+
     // Handle Dilithium types (legacy P2PKH-style and native PQ witness share key material)
     if (type == OutputType::DILITHIUM_LEGACY || type == OutputType::DILITHIUM_BECH32) {
         // Generate Dilithium keypair using crypto/dilithium.h interface
@@ -2992,6 +2953,9 @@ util::Result<CTxDestination> CWallet::GetNewChangeDestination(const OutputType t
 {
     LOCK(cs_wallet);
 
+    if (type != OutputType::DILITHIUM_LEGACY && type != OutputType::DILITHIUM_BECH32) {
+        return util::Error{_("Only Dilithium address generation is supported")};
+    }
     ReserveDestination reservedest(this, type);
     auto op_dest = reservedest.GetReservedDestination(true);
     if (op_dest) reservedest.KeepDestination();
@@ -3068,6 +3032,9 @@ std::set<std::string> CWallet::ListAddrBookLabels(const std::optional<AddressPur
 
 util::Result<CTxDestination> ReserveDestination::GetReservedDestination(bool internal)
 {
+    if (type != OutputType::DILITHIUM_LEGACY && type != OutputType::DILITHIUM_BECH32) {
+        return util::Error{_("Only Dilithium address generation is supported")};
+    }
     // Dilithium keys are created by GetNewDestination, not the internal ECDSA keypool.
     if (type == OutputType::DILITHIUM_LEGACY || type == OutputType::DILITHIUM_BECH32) {
         if (!IsValidDestination(address)) {
@@ -3556,6 +3523,10 @@ std::shared_ptr<CWallet> CWallet::Create(WalletContext& context, const std::stri
             error = strprintf(_("Unknown address type '%s'"), args.GetArg("-addresstype", ""));
             return nullptr;
         }
+        if (*parsed != OutputType::DILITHIUM_LEGACY && *parsed != OutputType::DILITHIUM_BECH32) {
+            error = _("Only Dilithium address generation is supported (-addresstype)");
+            return nullptr;
+        }
         walletInstance->m_default_address_type = parsed.value();
     }
 
@@ -3563,6 +3534,10 @@ std::shared_ptr<CWallet> CWallet::Create(WalletContext& context, const std::stri
         std::optional<OutputType> parsed = ParseOutputType(args.GetArg("-changetype", ""));
         if (!parsed) {
             error = strprintf(_("Unknown change type '%s'"), args.GetArg("-changetype", ""));
+            return nullptr;
+        }
+        if (*parsed != OutputType::DILITHIUM_LEGACY && *parsed != OutputType::DILITHIUM_BECH32) {
+            error = _("Only Dilithium address generation is supported (-changetype)");
             return nullptr;
         }
         walletInstance->m_default_change_type = parsed.value();

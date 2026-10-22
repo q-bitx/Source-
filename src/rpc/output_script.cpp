@@ -118,6 +118,8 @@ static RPCHelpMan createmultisig()
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
         {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Classic multisig address generation is not supported; use Dilithium addresses");
+
             int required = request.params[0].getInt<int>();
 
             // Get the public keys
@@ -248,6 +250,13 @@ static UniValue DeriveAddresses(const Descriptor* desc, int64_t range_begin, int
                 throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Descriptor does not have a corresponding address");
             }
 
+            if (!std::holds_alternative<DilithiumPKHash>(dest) &&
+                !std::holds_alternative<DilithiumWitnessV0KeyHash>(dest) &&
+                !std::holds_alternative<DilithiumPubKeyDestination>(dest) &&
+                !std::holds_alternative<DilithiumScriptHash>(dest) &&
+                !std::holds_alternative<DilithiumWitnessV0ScriptHash>(dest)) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Only Dilithium address generation is supported");
+            }
             addresses.push_back(EncodeDestination(dest));
         }
     }

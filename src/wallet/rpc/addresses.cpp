@@ -30,7 +30,7 @@ RPCHelpMan getnewaddress()
                 "so payments received with the address will be associated with 'label'.\n",
                 {
                     {"label", RPCArg::Type::STR, RPCArg::Default{""}, "The label name for the address to be linked to. It can also be set to the empty string \"\" to represent the default label. The label does not need to exist, it will be created if there is no label by the given name."},
-                    {"address_type", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "The address type to use. \"pq\" (default) selects auto PQ per activation height. Also: \"pq-bech32\" / \"dilithium-bech32\" (witness, rejected before activation), \"dilithium-legacy\" / aliases for explicit legacy PQ, plus Bitcoin-style legacy/p2sh-segwit/bech32/bech32m."},
+                    {"address_type", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "The address type to use. \"pq\" (default) selects auto PQ per activation height. Also: \"pq-bech32\" / \"dilithium-bech32\" (witness, rejected before activation), \"dilithium-legacy\" / aliases for explicit legacy PQ. Classic address formats are disabled."},
                 },
                 RPCResult{
                     RPCResult::Type::STR, "address", "The new address"
@@ -42,8 +42,8 @@ RPCHelpMan getnewaddress()
                     + HelpExampleCli("getnewaddress", "\"mylabel\"") +
                     "\nGet a new PQ address explicitly\n"
                     + HelpExampleCli("getnewaddress", "\"\" \"pq\"") +
-                    "\nGet a Bitcoin-style bech32 address\n"
-                    + HelpExampleCli("getnewaddress", "\"\" \"bech32\"")
+                    "\nGet a native Dilithium address after activation\n"
+                    + HelpExampleCli("getnewaddress", "\"\" \"pq-bech32\"")
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -76,6 +76,9 @@ RPCHelpMan getnewaddress()
             if (!parsed) {
                 throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Unknown address type '%s'", type_str));
             }
+            if (*parsed != OutputType::DILITHIUM_LEGACY && *parsed != OutputType::DILITHIUM_BECH32) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Only Dilithium address generation is supported");
+            }
             if (parsed.value() == OutputType::BECH32M && pwallet->GetLegacyScriptPubKeyMan()) {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "Legacy wallets cannot provide bech32m addresses");
             }
@@ -101,10 +104,10 @@ RPCHelpMan getnewaddress()
 RPCHelpMan getrawchangeaddress()
 {
     return RPCHelpMan{"getrawchangeaddress",
-                "\nReturns a new Bitcoin address, for receiving change.\n"
+                "\nReturns a new Dilithium address for receiving change.\n"
                 "This is for use with raw transactions, NOT normal use.\n",
                 {
-                    {"address_type", RPCArg::Type::STR, RPCArg::DefaultHint{"set by -changetype"}, "The address type to use. Options are \"legacy\", \"p2sh-segwit\", \"bech32\", \"bech32m\". For PQ/Dilithium addresses, use getnewdilithiumaddress."},
+                    {"address_type", RPCArg::Type::STR, RPCArg::DefaultHint{"set by -changetype"}, "The address type: pq, dilithium-legacy, or pq-bech32 (after activation)."},
                 },
                 RPCResult{
                     RPCResult::Type::STR, "address", "The address"
@@ -124,17 +127,21 @@ RPCHelpMan getrawchangeaddress()
         throw JSONRPCError(RPC_WALLET_ERROR, "Error: This wallet has no available keys");
     }
 
-    OutputType output_type = pwallet->m_default_change_type.value_or(pwallet->m_default_address_type);
+    const bool witness_active = IsPqWitnessActiveForNextBlock(pwallet->chain());
+    OutputType output_type = pwallet->m_default_change_type.value_or(
+        witness_active ? OutputType::DILITHIUM_BECH32 : OutputType::DILITHIUM_LEGACY);
     if (!request.params[0].isNull()) {
-        std::optional<OutputType> parsed = ParseOutputType(request.params[0].get_str());
-        if (!parsed) {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Unknown address type '%s'", request.params[0].get_str()));
-        } else if (parsed.value() == OutputType::BECH32M && pwallet->GetLegacyScriptPubKeyMan()) {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, "Legacy wallets cannot provide bech32m addresses");
-        } else if (parsed.value() == OutputType::DILITHIUM_LEGACY || parsed.value() == OutputType::DILITHIUM_BECH32) {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, "pq/dilithium addresses are not supported via getrawchangeaddress. Use getnewdilithiumaddress.");
+        const std::string type = request.params[0].get_str();
+        if (type != "pq" && !type.empty()) {
+            const auto parsed = ParseOutputType(type);
+            if (!parsed || (*parsed != OutputType::DILITHIUM_LEGACY && *parsed != OutputType::DILITHIUM_BECH32)) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Only Dilithium address generation is supported");
+            }
+            output_type = *parsed;
         }
-        output_type = parsed.value();
+    }
+    if (output_type == OutputType::DILITHIUM_BECH32 && !witness_active) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Native Dilithium addresses are not active yet");
     }
 
     auto op_dest = pwallet->GetNewChangeDestination(output_type);
@@ -286,6 +293,8 @@ RPCHelpMan addmultisigaddress()
 {
     std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
     if (!pwallet) return UniValue::VNULL;
+
+    throw JSONRPCError(RPC_INVALID_PARAMETER, "Classic multisig address generation is not supported; use Dilithium addresses");
 
     LegacyScriptPubKeyMan& spk_man = EnsureLegacyScriptPubKeyMan(*pwallet);
 
