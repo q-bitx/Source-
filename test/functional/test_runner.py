@@ -115,6 +115,7 @@ BASE_SCRIPTS = [
     'feature_pqmigratelegacy.py --legacy-wallet',
     'feature_pqmigratelegacy.py --descriptors',
     'feature_pq_witness_mempool_rpc.py --descriptors',
+    'wallet_pq_send.py --descriptors',
     'feature_pq_consolidate_legacy.py --legacy-wallet',
     'feature_pq_consolidate_legacy.py --descriptors',
     'mempool_persist.py --descriptors',

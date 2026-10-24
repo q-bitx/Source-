@@ -6,6 +6,7 @@
 
 #include <node/types.h>
 #include <policy/policy.h>
+#include <script/pq_script.h>
 #include <script/signingprovider.h>
 #include <util/check.h>
 #include <util/strencodings.h>
@@ -317,10 +318,13 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned 
         return false;
     }
 
+    // PSBT verification has no chain tip; verify native PQ inputs with their signature rules.
+    unsigned int verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
+    if (IsNativePQWitnessProgram(utxo.scriptPubKey)) verify_flags |= SCRIPT_VERIFY_PQ_WITNESS;
     if (txdata) {
-        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, STANDARD_SCRIPT_VERIFY_FLAGS, MutableTransactionSignatureChecker{&(*psbt.tx), input_index, utxo.nValue, *txdata, MissingDataBehavior::FAIL});
+        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, verify_flags, MutableTransactionSignatureChecker{&(*psbt.tx), input_index, utxo.nValue, *txdata, MissingDataBehavior::FAIL});
     } else {
-        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, STANDARD_SCRIPT_VERIFY_FLAGS, MutableTransactionSignatureChecker{&(*psbt.tx), input_index, utxo.nValue, MissingDataBehavior::FAIL});
+        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, verify_flags, MutableTransactionSignatureChecker{&(*psbt.tx), input_index, utxo.nValue, MissingDataBehavior::FAIL});
     }
 }
 
@@ -377,13 +381,14 @@ bool SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& 
     PSBTInput& input = psbt.inputs.at(index);
     const CMutableTransaction& tx = *psbt.tx;
 
-    if (PSBTInputSignedAndVerified(psbt, index, txdata)) {
-        // The input is already signed, so signing is a no-op, but the caller
-        // still needs the requested Dilithium template flag on its SignatureData.
+    const bool verified = PSBTInputSignedAndVerified(psbt, index, txdata);
+    if (verified || PSBTInputSigned(input)) {
+        // Do not trust final fields after verification failed. Signing is a no-op,
+        // but the caller still needs the requested Dilithium template flag.
         if (out_sigdata) {
             out_sigdata->pq_witness_program_templates = pq_witness_program_templates;
         }
-        return true;
+        return verified;
     }
 
     // Fill SignatureData with input info

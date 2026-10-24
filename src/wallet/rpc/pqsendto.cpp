@@ -195,7 +195,7 @@ RPCHelpMan pqsendtoaddress()
     return RPCHelpMan{"pqsendtoaddress",
         "\nSend PQ (Dilithium) coins from a wallet address to another PQ address.\n"
         "Splits into multiple transactions when more than 16 inputs are needed, or when another legacy input would exceed the standard transaction weight limit.\n"
-        "This command is for regression testing (-regtest mode) only.\n"
+        "Available on mainnet and test networks. This RPC may create multiple transactions; use sendmany for an atomic multi-recipient send.\n"
         "The from_address must belong to the selected wallet.\n",
         {
             {"from_address", RPCArg::Type::STR, RPCArg::Optional::NO, "Source PQ/Dilithium address (must belong to this wallet)"},

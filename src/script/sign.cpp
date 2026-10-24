@@ -604,7 +604,17 @@ bool ProduceSignature(const SigningProvider& provider, const BaseSignatureCreato
         CScript witnessscript;
         witnessscript << OP_DUP << OP_HASH160 << ToByteVector(result[0]) << OP_EQUALVERIFY << OP_CHECKSIG;
         TxoutType subType;
-        solved = solved && SignStep(provider, creator, witnessscript, result, subType, SigVersion::WITNESS_V0, sigdata);
+        if (whichType == TxoutType::DILITHIUM_WITNESS_V0_KEYHASH) {
+            // Native PQ uses the same scriptCode template, but Dilithium keys and signatures.
+            CDilithiumPubKey pubkey;
+            std::vector<unsigned char> sig;
+            solved = GetDilithiumPubKey(provider, DilithiumPKHash{uint160(result[0])}, pubkey) &&
+                     CreateDilithiumSig(creator, provider, sig, pubkey, witnessscript, SigVersion::WITNESS_V0);
+            result.clear();
+            if (solved) result = {std::move(sig), ToByteVector(pubkey)};
+        } else {
+            solved = SignStep(provider, creator, witnessscript, result, subType, SigVersion::WITNESS_V0, sigdata);
+        }
         sigdata.scriptWitness.stack = result;
         sigdata.witness = true;
         result.clear();

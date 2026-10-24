@@ -1156,6 +1156,12 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     if (coin_selection_params.m_max_tx_weight.value() < minimum_tx_weight || coin_selection_params.m_max_tx_weight.value() > MAX_STANDARD_TX_WEIGHT) {
         return util::Error{strprintf(_("Maximum transaction weight must be between %d and %d"), minimum_tx_weight, MAX_STANDARD_TX_WEIGHT)};
     }
+    // Coin selection weights are input vbytes * WITNESS_SCALE_FACTOR.
+    // Convert the active-chain weight budget to those same units. With k=16,
+    // passing the raw limit would allow four times the actual input weight.
+    coin_selection_params.m_max_tx_weight =
+        *coin_selection_params.m_max_tx_weight * WITNESS_SCALE_FACTOR / wallet_wscale;
+
     // Set the long term feerate estimate to the wallet's consolidate feerate
     coin_selection_params.m_long_term_feerate = wallet.m_consolidate_feerate;
     // Static vsize overhead + outputs vsize. 4 nVersion, 4 nLocktime, 1 input count, 1 witness overhead (dummy, flag, stack size)
