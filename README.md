@@ -84,12 +84,13 @@ https://github.com/q-bitx/Source-/releases/latest
 
 Check the release assets and SHA256SUMS.txt before installation. The source tree may be newer than the latest published binaries.
 
-Typical v0.4.0 release assets (when published):
+Q-BitX Core v0.4.0 is a **command-line release** for Linux and Windows. The Windows GUI wallet and installer are not included; they will be published separately after GUI-specific testing.
+
+v0.4.0 release assets:
 
 ```text
 qbitx-v0.4.0-linux.tar.gz
 qbitx-v0.4.0-windows.zip
-QBitX-Wallet-Setup-0.4.0.exe
 SHA256SUMS.txt
 ```
 
@@ -165,13 +166,14 @@ Download the Windows release package from:
 https://github.com/q-bitx/Source-/releases/latest
 ```
 
-Typical files:
+Included Windows command-line programs:
 
 ```text
 qbitx.exe
 qbitx-cli.exe
-qbitx-gui.exe
 ```
+
+A Windows GUI installer will follow in a separate update.
 
 PowerShell example:
 
