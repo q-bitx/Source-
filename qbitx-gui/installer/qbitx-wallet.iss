@@ -1,10 +1,10 @@
 [Setup]
 AppName=QBitX Wallet
-AppVersion=0.3.3
+AppVersion=0.4.0
 DefaultDirName={autopf}\QBitX Wallet
 DefaultGroupName=QBitX Wallet
 OutputDir=dist
-OutputBaseFilename=QBitX-Wallet-Setup-0.3.3
+OutputBaseFilename=QBitX-Wallet-Setup-0.4.0
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
