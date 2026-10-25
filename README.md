@@ -82,14 +82,15 @@ Latest release:
 https://github.com/q-bitx/Source-/releases/latest
 ```
 
-Typical release files:
+Check the release assets and SHA256SUMS.txt before installation. The source tree may be newer than the latest published binaries.
+
+Typical v0.4.0 release assets (when published):
 
 ```text
-qbitx-linux-x86_64.zip
-qbitx-windows-x86_64.zip
-qbitx.exe
-qbitx-cli.exe
-qbitx-gui.exe
+qbitx-v0.4.0-linux.tar.gz
+qbitx-v0.4.0-windows.zip
+QBitX-Wallet-Setup-0.4.0.exe
+SHA256SUMS.txt
 ```
 
 ---
@@ -107,9 +108,10 @@ On some Ubuntu versions, package names may differ slightly. If a package is unav
 
 ### 2. Download and unpack
 
+Download `qbitx-v0.4.0-linux.tar.gz` from the verified GitHub release assets, then run:
+
 ```bash
-wget https://github.com/q-bitx/Source-/releases/download/v0.3.1/qbitx-v0.3.1-linux.gz
-unzip qbitx-linux-x86_64.gz
+tar -xzf qbitx-v0.4.0-linux.tar.gz
 chmod +x qbitx qbitx-cli
 ```
 
@@ -126,8 +128,8 @@ txindex=1
 # RPC 
 rpcbind=127.0.0.1
 rpcallowip=127.0.0.1
-rpcuser=qbx
-rpcpassword=qbxpass
+# For local CLI, prefer automatic cookie-based RPC authentication.
+# Never expose RPC to the Internet or use example/static passwords.
 
 # P2P
 listen=1
