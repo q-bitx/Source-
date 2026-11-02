@@ -1,0 +1,1353 @@
+diff --git a/qbitx-gui/CMakeLists.txt b/qbitx-gui/CMakeLists.txt
+index 9ec50a2..23e3c36 100644
+--- a/qbitx-gui/CMakeLists.txt
++++ b/qbitx-gui/CMakeLists.txt
+@@ -23,6 +23,7 @@ endif()
+ find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Widgets Network)
+ qt_add_executable(qbitx-gui
+     main.cpp
++    windowstyle.h
+     settingsmanager.h
+     settingsmanager.cpp
+     clibridge.h
+diff --git a/qbitx-gui/clibridge.cpp b/qbitx-gui/clibridge.cpp
+index 890e36d..6db22b6 100644
+--- a/qbitx-gui/clibridge.cpp
++++ b/qbitx-gui/clibridge.cpp
+@@ -166,8 +166,6 @@ void CliBridge::executeCommand(const QStringList &command, const QString &method
+             process->deleteLater();
+             return;
+         }
+-        *handled = true;
+-
+         const QByteArray stdoutBytes = process->readAllStandardOutput();
+         const QByteArray stderrBytes = process->readAllStandardError();
+         const QString out = QString::fromUtf8(stdoutBytes.constData(), stdoutBytes.size()).trimmed();
+@@ -280,7 +278,6 @@ void CliBridge::executeCommand(const QStringList &command, const QString &method
+             return;
+ 
+         timeoutTimer->stop();
+-        *handled = true;
+ 
+         const QString errMsg = QStringLiteral("Failed to start qbitx-cli (%1)\ncommand: %2")
+                                    .arg(method, commandLogLine);
+diff --git a/qbitx-gui/cmake/toolchain-mingw64.cmake b/qbitx-gui/cmake/toolchain-mingw64.cmake
+index 961432c..2b0d409 100644
+--- a/qbitx-gui/cmake/toolchain-mingw64.cmake
++++ b/qbitx-gui/cmake/toolchain-mingw64.cmake
+@@ -21,6 +21,9 @@ endif()
+ 
+ # Search only in sysroot (and Qt find root) for libs/includes/packages; never use host /usr
+ set(CMAKE_FIND_ROOT_PATH "${MINGW_SYSROOT}")
++if(QT_TARGET_PATH)
++    list(APPEND CMAKE_FIND_ROOT_PATH "${QT_TARGET_PATH}")
++endif()
+ # Programs (moc, rcc, uic): use host — pass QT_HOST_PATH when configuring
+ set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+ set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+diff --git a/qbitx-gui/docs/build-windows.md b/qbitx-gui/docs/build-windows.md
+index 4140def..906aaf8 100644
+--- a/qbitx-gui/docs/build-windows.md
++++ b/qbitx-gui/docs/build-windows.md
+@@ -56,3 +56,22 @@ Set before running the script or cmake:
+ 
+ - `QT_MINGW` / `Qt6_DIR`: Qt for MinGW (target).
+ - `QT_HOST` / `QT_HOST_PATH`: Qt for host (moc, rcc, uic).
++
++## Core 0.4.0 bundle and installer
++
++The bundle requires the official `qbitx-v0.4.0-windows.zip` archive and checks its
++published SHA-256. Missing or mismatched Core binaries must not be packaged.
++
++```bash
++CORE_ARCHIVE=/path/to/qbitx-v0.4.0-windows.zip ./scripts/bundle-win.sh
++```
++
++Compile `installer/qbitx-wallet.iss` using Inno Setup 6 on Windows. The destination
++page is always shown, including upgrades. Node and CLI binaries live beside
++`qbitx-gui.exe`; automatic CLI detection follows the current application folder.
++An explicit manual CLI path remains supported. Wallet/blockchain data stays in
++the existing data directory when changing the installation destination.
++
++Before distributing, check installation and upgrade to a custom path containing
++spaces, launch/close, CLI version 0.4.0, and a send on a disposable test wallet.
++After an ambiguous send failure, check history before retrying.
+diff --git a/qbitx-gui/installer/qbitx-wallet.iss b/qbitx-gui/installer/qbitx-wallet.iss
+index bbc8a73..ee27bf3 100644
+--- a/qbitx-gui/installer/qbitx-wallet.iss
++++ b/qbitx-gui/installer/qbitx-wallet.iss
+@@ -3,6 +3,7 @@ AppName=QBitX Wallet
+ AppVersion=0.4.0
+ DefaultDirName={autopf}\QBitX Wallet
+ DefaultGroupName=QBitX Wallet
++DisableDirPage=no
+ OutputDir=dist
+ OutputBaseFilename=QBitX-Wallet-Setup-0.4.0
+ Compression=lzma
+@@ -30,8 +31,5 @@ Name: "{autodesktop}\QBitX Wallet"; Filename: "{app}\qbitx-gui.exe"; WorkingDir:
+ Filename: "taskkill"; Parameters: "/F /IM qbitx-gui.exe"; Flags: runhidden; RunOnceId: "KillQBitXGui"
+ Filename: "taskkill"; Parameters: "/F /IM qbitx.exe"; Flags: runhidden; RunOnceId: "KillQBitXNode"
+ 
+-[UninstallDelete]
+-Type: filesandordirs; Name: "{app}"
+-
+ [Run]
+ Filename: "{app}\qbitx-gui.exe"; Description: "Launch QBitX Wallet"; Flags: nowait postinstall skipifsilent
+diff --git a/qbitx-gui/logmanager.cpp b/qbitx-gui/logmanager.cpp
+index 049f5a2..8f31e73 100644
+--- a/qbitx-gui/logmanager.cpp
++++ b/qbitx-gui/logmanager.cpp
+@@ -97,7 +97,11 @@ void LogManager::flushUiUpdate()
+ {
+     if (!m_logTextDirty)
+         return;
+-    m_logText = m_lines.join("\n");
++    QStringList newestFirst;
++    newestFirst.reserve(m_lines.size());
++    for (auto it = m_lines.crbegin(); it != m_lines.crend(); ++it)
++        newestFirst.append(*it);
++    m_logText = newestFirst.join("\n");
+     m_logTextDirty = false;
+     emit logTextChanged();
+ }
+diff --git a/qbitx-gui/main.cpp b/qbitx-gui/main.cpp
+index c56b380..e94dd63 100644
+--- a/qbitx-gui/main.cpp
++++ b/qbitx-gui/main.cpp
+@@ -23,6 +23,7 @@
+ #include "rpcwalletbootstrap.h"
+ #include "traymanager.h"
+ #include "appinstance.h"
++#include "windowstyle.h"
+ 
+ static bool debugInputEnabled()
+ {
+@@ -172,6 +173,8 @@ int main(int argc, char *argv[])
+         qputenv("QT_QUICK_BACKEND", "software");
+     }
+ 
++    // Customized controls require a style that supports custom backgrounds.
++    qputenv("QT_QUICK_CONTROLS_STYLE", "Basic");
+     QApplication app(argc, argv);
+     app.setApplicationName("qbitx-gui");
+     app.setOrganizationName("qbitx");
+@@ -287,6 +290,7 @@ int main(int argc, char *argv[])
+     QObject *root = engine.rootObjects().first();
+     QWindow *win = qobject_cast<QWindow *>(root);
+     if (win) {
++        applyWalletWindowStyle(win);
+         trayManager->setMainWindow(win);
+         appInstance.setMainWindow(win);
+         win->raise();
+diff --git a/qbitx-gui/qml/components/QbxButton.qml b/qbitx-gui/qml/components/QbxButton.qml
+index e2a3c31..1c39273 100644
+--- a/qbitx-gui/qml/components/QbxButton.qml
++++ b/qbitx-gui/qml/components/QbxButton.qml
+@@ -17,9 +17,14 @@ Button {
+     leftPadding: compact ? 14 : 18
+     rightPadding: compact ? 14 : 18
+     font.pixelSize: compact ? 13 : 14
+-    font.weight: primary ? Font.DemiBold : Font.Normal
++    font.weight: primary ? Font.DemiBold : Font.Medium
++
++    hoverEnabled: true
++    scale: control.down ? 0.98 : 1
++    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
+ 
+     background: Rectangle {
++        Behavior on color { ColorAnimation { duration: 160 } }
+         radius: QbxTheme.radiusSmall
+         color: {
+             if (!control.enabled)
+@@ -29,7 +34,7 @@ Button {
+             return control.pressed ? QbxTheme.bgActive : (control.hovered ? QbxTheme.bgHover : QbxTheme.bgInput)
+         }
+         border.width: control.primary ? 0 : 1
+-        border.color: control.enabled ? QbxTheme.border : Qt.darker(QbxTheme.border, 1.2)
++        border.color: control.visualFocus ? QbxTheme.accentGlow : (control.enabled ? QbxTheme.border : Qt.darker(QbxTheme.border, 1.2))
+     }
+ 
+     contentItem: Text {
+@@ -40,7 +45,7 @@ Button {
+             if (!control.enabled)
+                 return QbxTheme.textMuted
+             if (control.primary)
+-                return "#042028"
++                return "#ffffff"
+             return QbxTheme.textPrimary
+         }
+         horizontalAlignment: Text.AlignHCenter
+diff --git a/qbitx-gui/qml/components/QbxCard.qml b/qbitx-gui/qml/components/QbxCard.qml
+index f0cc900..409744d 100644
+--- a/qbitx-gui/qml/components/QbxCard.qml
++++ b/qbitx-gui/qml/components/QbxCard.qml
+@@ -13,12 +13,12 @@ Rectangle {
+     radius: QbxTheme.radiusMedium
+     border.color: QbxTheme.border
+     border.width: 1
+-    implicitHeight: Math.max(compact ? 0 : QbxTheme.cardMinHeight, contentColumn.implicitHeight + 28)
++    implicitHeight: Math.max(compact ? 0 : QbxTheme.cardMinHeight, contentColumn.implicitHeight + 40)
+ 
+     ColumnLayout {
+         id: contentColumn
+         anchors.fill: parent
+-        anchors.margins: 16
++        anchors.margins: 20
+         spacing: 12
+ 
+         Text {
+@@ -26,14 +26,17 @@ Rectangle {
+             visible: text !== ""
+             font.pixelSize: 15
+             font.weight: Font.DemiBold
+-            color: QbxTheme.accentGlow
++            color: QbxTheme.textPrimary
+             Layout.fillWidth: true
++            Layout.alignment: Qt.AlignTop
+         }
+ 
+         ColumnLayout {
+             id: innerContent
+             Layout.fillWidth: true
+-            spacing: 6
++            spacing: 10
++            Layout.alignment: Qt.AlignTop
+         }
++        Item { Layout.fillHeight: true }
+     }
+ }
+diff --git a/qbitx-gui/qml/components/QbxComboBox.qml b/qbitx-gui/qml/components/QbxComboBox.qml
+index cfad62a..ccc967c 100644
+--- a/qbitx-gui/qml/components/QbxComboBox.qml
++++ b/qbitx-gui/qml/components/QbxComboBox.qml
+@@ -63,6 +63,7 @@ ComboBox {
+         radius: QbxTheme.radiusSmall
+         color: QbxTheme.bgInput
+         border.color: comboRoot.activeFocus ? QbxTheme.accent : QbxTheme.border
++        Behavior on border.color { ColorAnimation { duration: 160 } }
+         border.width: 1
+     }
+ 
+diff --git a/qbitx-gui/qml/components/QbxInfoRow.qml b/qbitx-gui/qml/components/QbxInfoRow.qml
+index 6ac52d2..45ed0a5 100644
+--- a/qbitx-gui/qml/components/QbxInfoRow.qml
++++ b/qbitx-gui/qml/components/QbxInfoRow.qml
+@@ -16,15 +16,15 @@ RowLayout {
+         text: root.label
+         font.pixelSize: 13
+         color: QbxTheme.textSecondary
+-        Layout.preferredWidth: 160
+-        Layout.maximumWidth: 160
++        Layout.preferredWidth: 125
++        Layout.maximumWidth: 125
+         elide: Text.ElideRight
+     }
+ 
+     Text {
+         text: root.value
+         font.pixelSize: 14
+-        font.weight: root.highlight ? Font.DemiBold : Font.Normal
++        font.weight: root.highlight ? Font.DemiBold : Font.Medium
+         color: root.highlight ? QbxTheme.textPrimary : QbxTheme.textPrimary
+         Layout.fillWidth: true
+         wrapMode: Text.Wrap
+diff --git a/qbitx-gui/qml/components/QbxPageLayout.qml b/qbitx-gui/qml/components/QbxPageLayout.qml
+index 1b0fae7..33fd9fd 100644
+--- a/qbitx-gui/qml/components/QbxPageLayout.qml
++++ b/qbitx-gui/qml/components/QbxPageLayout.qml
+@@ -12,18 +12,19 @@ Item {
+     readonly property int columnWidth: Math.min(QbxTheme.contentMaxWidth, contentWidth)
+ 
+     ScrollView {
++        id: pageScroll
++        padding: QbxTheme.pagePadding
+         anchors.fill: parent
+         clip: true
++        contentWidth: availableWidth
++        contentHeight: contentColumn.implicitHeight
+         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+ 
+         ColumnLayout {
+             id: contentColumn
+             width: root.columnWidth
+-            anchors.left: parent.left
+-            anchors.leftMargin: QbxTheme.pagePadding
+-            anchors.top: parent.top
+-            anchors.topMargin: QbxTheme.pagePadding
+-            anchors.bottomMargin: QbxTheme.pagePadding
++            x: 0
++            y: 0
+             spacing: 20
+         }
+     }
+diff --git a/qbitx-gui/qml/components/QbxSectionTitle.qml b/qbitx-gui/qml/components/QbxSectionTitle.qml
+index 257cb4c..0e6fd18 100644
+--- a/qbitx-gui/qml/components/QbxSectionTitle.qml
++++ b/qbitx-gui/qml/components/QbxSectionTitle.qml
+@@ -2,7 +2,8 @@ import QtQuick
+ import "../theme"
+ 
+ Text {
+-    font.pixelSize: 24
++    font.pixelSize: 28
++    font.letterSpacing: -0.6
+     font.weight: Font.DemiBold
+     color: QbxTheme.textPrimary
+ }
+diff --git a/qbitx-gui/qml/components/QbxTextField.qml b/qbitx-gui/qml/components/QbxTextField.qml
+index e00f139..b58217e 100644
+--- a/qbitx-gui/qml/components/QbxTextField.qml
++++ b/qbitx-gui/qml/components/QbxTextField.qml
+@@ -6,7 +6,7 @@ TextField {
+     color: QbxTheme.textPrimary
+     placeholderTextColor: QbxTheme.textMuted
+     selectionColor: QbxTheme.accent
+-    selectedTextColor: "#042028"
++    selectedTextColor: "#ffffff"
+     font.pixelSize: 13
+     implicitHeight: 38
+     leftPadding: 12
+@@ -17,5 +17,6 @@ TextField {
+         color: QbxTheme.bgInput
+         border.color: parent.activeFocus ? QbxTheme.accent : QbxTheme.border
+         border.width: 1
++        Behavior on border.color { ColorAnimation { duration: 160 } }
+     }
+ }
+diff --git a/qbitx-gui/qml/components/SidebarButton.qml b/qbitx-gui/qml/components/SidebarButton.qml
+index 7a4b0f4..f2d5239 100644
+--- a/qbitx-gui/qml/components/SidebarButton.qml
++++ b/qbitx-gui/qml/components/SidebarButton.qml
+@@ -1,38 +1,59 @@
+-import QtQuick 2.15
+-import QtQuick.Controls 2.15
+-import QtQuick.Layouts 1.15
++import QtQuick
++import QtQuick.Controls
++import QtQuick.Layouts
+ import "../theme"
+ 
+ Button {
+     id: control
++    property bool active: false
+     Layout.fillWidth: true
+-    Layout.preferredHeight: 44
++    Layout.preferredHeight: 46
+     leftPadding: 16
+-    rightPadding: 16
+-    font.pixelSize: 14
+-
+-    property bool active: false
+-
++    rightPadding: 14
++    hoverEnabled: true
+     background: Rectangle {
+-        radius: QbxTheme.radiusSmall
+-        color: {
+-            if (control.active)
+-                return Qt.rgba(QbxTheme.accent.r, QbxTheme.accent.g, QbxTheme.accent.b, 0.18)
+-            if (control.hovered)
+-                return QbxTheme.bgHover
+-            return "transparent"
++        radius: 11
++        color: control.active ? "#1d365a" : (control.hovered ? QbxTheme.bgHover : "transparent")
++        Behavior on color { ColorAnimation { duration: 180 } }
++        border.width: control.visualFocus ? 1 : 0
++        border.color: QbxTheme.accentGlow
++        Rectangle {
++            width: 3; height: 20; radius: 2
++            anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
++            color: QbxTheme.accent
++            opacity: control.active ? 1 : 0
++            Behavior on opacity { NumberAnimation { duration: 180 } }
+         }
+-        border.width: control.active ? 1 : 0
+-        border.color: control.active ? QbxTheme.accent : "transparent"
+     }
+-
+-    contentItem: Text {
+-        text: control.text
+-        color: control.active ? QbxTheme.accentGlow : QbxTheme.textSecondary
+-        font.pixelSize: control.font.pixelSize
+-        font.weight: control.active ? Font.DemiBold : Font.Normal
+-        horizontalAlignment: Text.AlignLeft
+-        verticalAlignment: Text.AlignVCenter
+-        leftPadding: 4
++    contentItem: Row {
++        spacing: 12
++        Canvas {
++            id: symbol
++            width: 20; height: 20
++            anchors.verticalCenter: parent.verticalCenter
++            property color ink: control.active ? QbxTheme.accentGlow : QbxTheme.textSecondary
++            onInkChanged: requestPaint()
++            onPaint: {
++                var c=getContext("2d"); c.reset(); c.strokeStyle=ink; c.lineWidth=1.5; c.lineCap="round"; c.lineJoin="round"
++                c.beginPath()
++                switch(control.text) {
++                case "Dashboard": c.strokeRect(2,2,6,6); c.strokeRect(12,2,6,6); c.strokeRect(2,12,6,6); c.strokeRect(12,12,6,6); break
++                case "Wallets": c.strokeRect(2,5,16,12); c.strokeRect(12,9,6,5); c.moveTo(3,5); c.lineTo(15,2); break
++                case "Addresses": c.strokeRect(3,2,14,16); c.moveTo(7,7); c.lineTo(13,7); c.moveTo(7,11); c.lineTo(13,11); break
++                case "Send": c.moveTo(2,9); c.lineTo(18,2); c.lineTo(12,18); c.lineTo(9,11); c.closePath(); c.moveTo(9,11); c.lineTo(18,2); break
++                case "History": c.arc(10,10,8,-0.5,4.5); c.moveTo(10,5); c.lineTo(10,10); c.lineTo(14,12); break
++                case "Logs": c.strokeRect(2,3,16,14); c.moveTo(5,7); c.lineTo(8,10); c.lineTo(5,13); c.moveTo(11,13); c.lineTo(15,13); break
++                default: c.arc(10,10,7,0,Math.PI*2); c.moveTo(13,10); c.arc(10,10,3,0,Math.PI*2); break
++                }
++                c.stroke()
++            }
++        }
++        Text {
++            text: control.text
++            color: control.active ? QbxTheme.textPrimary : QbxTheme.textSecondary
++            font.pixelSize: 14
++            font.weight: control.active ? Font.DemiBold : Font.Medium
++            anchors.verticalCenter: parent.verticalCenter
++        }
+     }
+ }
+diff --git a/qbitx-gui/qml/components/StatusPanel.qml b/qbitx-gui/qml/components/StatusPanel.qml
+index a7c4e62..8b0bd0b 100644
+--- a/qbitx-gui/qml/components/StatusPanel.qml
++++ b/qbitx-gui/qml/components/StatusPanel.qml
+@@ -14,14 +14,14 @@ Rectangle {
+     property string panelType: "info"   // "error" | "info" | "warning"
+ 
+     color: {
+-        if (panelType === "error") return Qt.rgba(QbxTheme.error.r, QbxTheme.error.g, QbxTheme.error.b, 0.12)
+-        if (panelType === "warning") return Qt.rgba(QbxTheme.warning.r, QbxTheme.warning.g, QbxTheme.warning.b, 0.12)
+-        return Qt.rgba(QbxTheme.info.r, QbxTheme.info.g, QbxTheme.info.b, 0.12)
++        if (panelType === "error") return Qt.rgba(QbxTheme.error.r, QbxTheme.error.g, QbxTheme.error.b, 0.07)
++        if (panelType === "warning") return Qt.rgba(QbxTheme.warning.r, QbxTheme.warning.g, QbxTheme.warning.b, 0.07)
++        return Qt.rgba(QbxTheme.info.r, QbxTheme.info.g, QbxTheme.info.b, 0.07)
+     }
+     border.color: {
+-        if (panelType === "error") return Qt.rgba(QbxTheme.error.r, QbxTheme.error.g, QbxTheme.error.b, 0.45)
+-        if (panelType === "warning") return Qt.rgba(QbxTheme.warning.r, QbxTheme.warning.g, QbxTheme.warning.b, 0.45)
+-        return Qt.rgba(QbxTheme.info.r, QbxTheme.info.g, QbxTheme.info.b, 0.45)
++        if (panelType === "error") return Qt.rgba(QbxTheme.error.r, QbxTheme.error.g, QbxTheme.error.b, 0.22)
++        if (panelType === "warning") return Qt.rgba(QbxTheme.warning.r, QbxTheme.warning.g, QbxTheme.warning.b, 0.22)
++        return Qt.rgba(QbxTheme.info.r, QbxTheme.info.g, QbxTheme.info.b, 0.22)
+     }
+ 
+     implicitHeight: contentText.visible ? contentText.implicitHeight + 24 : 0
+diff --git a/qbitx-gui/qml/main.qml b/qbitx-gui/qml/main.qml
+index 29c5b35..509209e 100644
+--- a/qbitx-gui/qml/main.qml
++++ b/qbitx-gui/qml/main.qml
+@@ -16,6 +16,19 @@ ApplicationWindow {
+     title: "Q-BitX Wallet"
+     color: QbxTheme.bgApp
+ 
++    palette.window: QbxTheme.bgContent
++    palette.windowText: QbxTheme.textPrimary
++    palette.base: QbxTheme.bgInput
++    palette.alternateBase: QbxTheme.bgCard
++    palette.text: QbxTheme.textPrimary
++    palette.button: QbxTheme.bgInput
++    palette.buttonText: QbxTheme.textPrimary
++    palette.highlight: QbxTheme.accent
++    palette.highlightedText: "#ffffff"
++    palette.mid: QbxTheme.textMuted
++    palette.dark: QbxTheme.border
++    palette.light: QbxTheme.borderLight
++    font.family: "Segoe UI"
+     property int currentPage: 0
+     property bool shutdownRequested: false
+ 
+@@ -148,6 +161,14 @@ ApplicationWindow {
+         }
+     }
+ 
++    Connections {
++        target: sendPage
++        function onTransactionSent(wallet) {
++            if (historyPage && historyPage.selectedWallet === wallet)
++                historyPage.refresh()
++        }
++    }
++
+     function triggerPageRefresh() {
+         if (currentPage === 0 && dashboardPage) dashboardPage.refresh()
+         else if (currentPage === 1 && walletsPage) walletsPage.refresh()
+@@ -195,12 +216,13 @@ ApplicationWindow {
+ 
+             ColumnLayout {
+                 anchors.fill: parent
+-                anchors.margins: 16
++                anchors.margins: 18
+                 spacing: 6
+ 
+                 RowLayout {
+                     Layout.fillWidth: true
+-                    Layout.bottomMargin: 12
++                    Layout.topMargin: 12
++                    Layout.bottomMargin: 28
+                     spacing: 10
+ 
+                     Item {
+@@ -246,13 +268,20 @@ ApplicationWindow {
+                             color: QbxTheme.textPrimary
+                         }
+                         Text {
+-                            text: "Desktop Wallet"
++                            text: "DESKTOP WALLET"
++                            font.letterSpacing: 1.3
+                             font.pixelSize: 11
+                             color: QbxTheme.textMuted
+                         }
+                     }
+                 }
+ 
++                Text {
++                    text: "WORKSPACE"; color: QbxTheme.textMuted
++                    font.pixelSize: 10; font.letterSpacing: 1.6
++                    Layout.leftMargin: 16; Layout.bottomMargin: 8
++                }
++
+                 SidebarButton {
+                     text: "Dashboard"
+                     active: currentPage === 0
+@@ -286,6 +315,28 @@ ApplicationWindow {
+ 
+                 Item { Layout.fillHeight: true }
+ 
++                Rectangle {
++                    Layout.fillWidth: true
++                    Layout.preferredHeight: 58
++                    radius: 12; color: "#121f33"
++                    RowLayout {
++                        anchors.fill: parent; anchors.margins: 14; spacing: 10
++                        Rectangle {
++                            width: 7; height: 7; radius: 4
++                            color: rpcBootstrap && rpcBootstrap.rpcReady ? QbxTheme.success : QbxTheme.warning
++                        }
++                        ColumnLayout {
++                            spacing: 3
++                            Text { text: "LOCAL NODE"; color: QbxTheme.textMuted; font.pixelSize: 9; font.letterSpacing: 1.2 }
++                            Text {
++                                text: rpcBootstrap && rpcBootstrap.rpcReady ? "Connected" : "Starting…"
++                                color: QbxTheme.textSecondary; font.pixelSize: 12
++                            }
++                        }
++                        Item { Layout.fillWidth: true }
++                    }
++                }
++
+                 SidebarButton {
+                     text: "Settings"
+                     active: currentPage === 6
+@@ -306,42 +357,77 @@ ApplicationWindow {
+                 currentIndex: currentPage
+ 
+                 Pages.Dashboard {
++                    onVisibleChanged: if (visible) pageEntrance0.restart()
++                    NumberAnimation on opacity {
++                        id: pageEntrance0
++                        from: 0.35; to: 1; duration: 200; easing.type: Easing.OutCubic
++                    }
+                     id: dashboardPage
+                     Layout.fillWidth: true
+                     Layout.fillHeight: true
+                     padding: 0
+                 }
+                 Pages.Wallets {
++                    onVisibleChanged: if (visible) pageEntrance1.restart()
++                    NumberAnimation on opacity {
++                        id: pageEntrance1
++                        from: 0.35; to: 1; duration: 200; easing.type: Easing.OutCubic
++                    }
+                     id: walletsPage
+                     Layout.fillWidth: true
+                     Layout.fillHeight: true
+                     padding: 0
+                 }
+                 Pages.Addresses {
++                    onVisibleChanged: if (visible) pageEntrance2.restart()
++                    NumberAnimation on opacity {
++                        id: pageEntrance2
++                        from: 0.35; to: 1; duration: 200; easing.type: Easing.OutCubic
++                    }
+                     id: addressesPage
+                     Layout.fillWidth: true
+                     Layout.fillHeight: true
+                     padding: 0
+                 }
+                 Pages.Send {
++                    onVisibleChanged: if (visible) pageEntrance3.restart()
++                    NumberAnimation on opacity {
++                        id: pageEntrance3
++                        from: 0.35; to: 1; duration: 200; easing.type: Easing.OutCubic
++                    }
+                     id: sendPage
+                     Layout.fillWidth: true
+                     Layout.fillHeight: true
+                     padding: 0
+                 }
+                 Pages.History {
++                    onVisibleChanged: if (visible) pageEntrance4.restart()
++                    NumberAnimation on opacity {
++                        id: pageEntrance4
++                        from: 0.35; to: 1; duration: 200; easing.type: Easing.OutCubic
++                    }
+                     id: historyPage
+                     Layout.fillWidth: true
+                     Layout.fillHeight: true
+                     padding: 0
+                 }
+                 Pages.Logs {
++                    onVisibleChanged: if (visible) pageEntrance5.restart()
++                    NumberAnimation on opacity {
++                        id: pageEntrance5
++                        from: 0.35; to: 1; duration: 200; easing.type: Easing.OutCubic
++                    }
+                     id: logsPage
+                     Layout.fillWidth: true
+                     Layout.fillHeight: true
+                     padding: 0
+                 }
+                 Pages.Settings {
++                    onVisibleChanged: if (visible) pageEntrance6.restart()
++                    NumberAnimation on opacity {
++                        id: pageEntrance6
++                        from: 0.35; to: 1; duration: 200; easing.type: Easing.OutCubic
++                    }
+                     id: settingsPage
+                     Layout.fillWidth: true
+                     Layout.fillHeight: true
+diff --git a/qbitx-gui/qml/pages/Addresses.qml b/qbitx-gui/qml/pages/Addresses.qml
+index 3529070..4c32e06 100644
+--- a/qbitx-gui/qml/pages/Addresses.qml
++++ b/qbitx-gui/qml/pages/Addresses.qml
+@@ -412,7 +412,7 @@ Page {
+                 Layout.maximumWidth: 360
+                 Layout.preferredHeight: QbxTheme.formRowHeight
+                 model: walletManager ? walletManager.wallets : []
+-                onActivated: {
++                onActivated: function(index) {
+                     if (walletManager && walletManager.wallets && index >= 0 && index < walletManager.wallets.length) {
+                         var w = walletManager.wallets[index]
+                         if (w !== selectedWallet) {
+@@ -429,9 +429,12 @@ Page {
+             }
+             Rectangle {
+                 visible: selectedWallet !== ""
+-                height: 24
+-                width: Math.min(activeWalletLabel.implicitWidth + 16, 180)
+-                radius: QbxTheme.radiusSmall
++                implicitHeight: 28
++                implicitWidth: Math.min(activeWalletLabel.implicitWidth + 24, 180)
++                Layout.preferredWidth: implicitWidth
++                Layout.minimumWidth: implicitWidth
++                Layout.preferredHeight: implicitHeight
++                radius: height / 2
+                 color: Qt.rgba(QbxTheme.accent.r, QbxTheme.accent.g, QbxTheme.accent.b, 0.12)
+                 border.color: Qt.rgba(QbxTheme.accent.r, QbxTheme.accent.g, QbxTheme.accent.b, 0.35)
+                 border.width: 1
+@@ -441,7 +444,11 @@ Page {
+ 
+                 Text {
+                     id: activeWalletLabel
+-                    anchors.centerIn: parent
++                    anchors.fill: parent
++                    anchors.leftMargin: 12
++                    anchors.rightMargin: 12
++                    verticalAlignment: Text.AlignVCenter
++                    horizontalAlignment: Text.AlignHCenter
+                     text: selectedWallet !== "" ? selectedWallet : ""
+                     font.pixelSize: 11
+                     font.weight: Font.DemiBold
+@@ -587,7 +594,7 @@ Page {
+                         Text { Layout.preferredWidth: 72; text: "Immature"; font.bold: true; font.pixelSize: 11; color: QbxTheme.textSecondary; horizontalAlignment: Text.AlignRight }
+                         Text { Layout.preferredWidth: 48; text: "UTXOs"; font.bold: true; font.pixelSize: 11; color: QbxTheme.textSecondary; horizontalAlignment: Text.AlignRight }
+                         Text { Layout.preferredWidth: 72; text: "Total"; font.bold: true; font.pixelSize: 11; color: QbxTheme.textSecondary; horizontalAlignment: Text.AlignRight }
+-                        Text { Layout.preferredWidth: 52; text: "Copy"; font.bold: true; font.pixelSize: 11; color: QbxTheme.textSecondary; horizontalAlignment: Text.AlignHCenter }
++                        Text { Layout.preferredWidth: 72; Layout.minimumWidth: 72; Layout.maximumWidth: 72; text: "Copy"; font.bold: true; font.pixelSize: 11; color: QbxTheme.textSecondary; horizontalAlignment: Text.AlignHCenter }
+                     }
+                 }
+ 
+@@ -636,7 +643,9 @@ Page {
+                             horizontalAlignment: Text.AlignRight
+                         }
+                         QbxButton {
+-                            Layout.preferredWidth: 52
++                            Layout.preferredWidth: 72
++                            Layout.minimumWidth: 72
++                            Layout.maximumWidth: 72
+                             text: "Copy"
+                             compact: true
+                             enabled: !!(modelData && modelData.address)
+diff --git a/qbitx-gui/qml/pages/Dashboard.qml b/qbitx-gui/qml/pages/Dashboard.qml
+index 4115707..ec2151e 100644
+--- a/qbitx-gui/qml/pages/Dashboard.qml
++++ b/qbitx-gui/qml/pages/Dashboard.qml
+@@ -126,6 +126,45 @@ Page {
+             panelType: "error"
+         }
+ 
++        Rectangle {
++            Layout.fillWidth: true
++            Layout.preferredHeight: 154
++            radius: QbxTheme.radiusLarge
++            border.color: "#31537f"
++            gradient: Gradient {
++                orientation: Gradient.Horizontal
++                GradientStop { position: 0; color: "#1c3a64" }
++                GradientStop { position: 1; color: "#16263e" }
++            }
++            ColumnLayout {
++                anchors.fill: parent; anchors.margins: 24; spacing: 12
++                Text { text: "NETWORK OVERVIEW"; color: "#a5c6f7"; font.pixelSize: 10; font.letterSpacing: 1.8 }
++                RowLayout {
++                    Layout.fillWidth: true
++                    spacing: 32
++                    ColumnLayout {
++                        Layout.fillWidth: true; Layout.preferredWidth: 1; spacing: 4
++                        Text { text: hasBlockchainInfo ? Number(blockchainInfo.blocks || 0).toLocaleString(Qt.locale(), 'f', 0) : "—"; color: QbxTheme.textPrimary; font.pixelSize: 32; font.weight: Font.DemiBold; font.letterSpacing: -0.8 }
++                        Text { text: "Block height"; color: QbxTheme.textSecondary; font.pixelSize: 12 }
++                    }
++                    ColumnLayout {
++                        Layout.fillWidth: true; Layout.preferredWidth: 1; spacing: 8
++                        Text { text: syncStatusText(); color: QbxTheme.textPrimary; font.pixelSize: 18; font.weight: Font.Medium }
++                        Rectangle {
++                            Layout.fillWidth: true; Layout.maximumWidth: 260
++                            height: 4; radius: 2; color: "#304563"
++                            Rectangle {
++                                height: parent.height; radius: 2; color: QbxTheme.accentGlow
++                                width: parent.width * (hasBlockchainInfo ? (blockchainInfo.initialblockdownload === false ? 1 : Math.min(1, (blockchainInfo.blocks || 0) / Math.max(1, blockchainInfo.headers || 1))) : 0)
++                                Behavior on width { NumberAnimation { duration: 400; easing.type: Easing.OutCubic } }
++                            }
++                        }
++                        Text { text: "Blockchain synchronization"; color: QbxTheme.textSecondary; font.pixelSize: 12 }
++                    }
++                }
++            }
++        }
++
+         RowLayout {
+             Layout.fillWidth: true
+             spacing: 16
+diff --git a/qbitx-gui/qml/pages/History.qml b/qbitx-gui/qml/pages/History.qml
+index 6722877..968fccd 100644
+--- a/qbitx-gui/qml/pages/History.qml
++++ b/qbitx-gui/qml/pages/History.qml
+@@ -13,6 +13,30 @@ Page {
+     property bool walletBusy: walletManager ? walletManager.walletBusy : false
+     property bool hasWallet: walletManager && walletManager.wallets ? walletManager.wallets.length > 0 : false
+     property string selectedWallet: ""
++    property string pendingHistoryTag: ""
++    property int historyRequestSerial: 0
++
++    onSelectedWalletChanged: {
++        transactions = []
++        pendingHistoryTag = ""
++        isLoading = false
++    }
++
++    Timer {
++        interval: 15000
++        repeat: true
++        running: historyPage.visible && !isLoading && !walletBusy
++                 && selectedWallet !== "" && rpcBootstrap && rpcBootstrap.rpcReady
++        onTriggered: refreshHistory()
++    }
++
++    Connections {
++        target: rpcBootstrap
++        function onRpcReadyChanged() {
++            if (rpcBootstrap && rpcBootstrap.rpcReady && historyPage.visible)
++                refreshHistory()
++        }
++    }
+ 
+     function transactionTimestamp(tx) {
+         if (!tx)
+@@ -43,22 +67,35 @@ Page {
+         isLoading = true
+         if (errorLabel)
+             errorLabel.text = ""
+-        cliBridge.call("listtransactions", ["*", "50", "0", "true"], selectedWallet)
++        historyRequestSerial += 1
++        pendingHistoryTag = "history:" + selectedWallet + ":" + historyRequestSerial
++        // Read mapWallet via listsinceblock: restored wallets may have an old
++        // wtxOrdered index, so listtransactions can omit newly recorded sends.
++        cliBridge.callNamedWithTag("listsinceblock", {
++            "include_watchonly": true,
++            "include_removed": false
++        }, selectedWallet, pendingHistoryTag)
+     }
+ 
+     Connections {
+         target: cliBridge
+-        function onSuccess(result) {
++        function onSuccessWithTag(result, tag) {
++            if (pendingHistoryTag === "" || tag !== pendingHistoryTag)
++                return
++            pendingHistoryTag = ""
+             isLoading = false
+-            if (Array.isArray(result)) {
+-                transactions = sortTransactionsNewestFirst(result)
++            if (result && Array.isArray(result.transactions)) {
++                transactions = sortTransactionsNewestFirst(result.transactions).slice(0, 50)
+             } else {
+                 transactions = []
+             }
+             if (errorLabel)
+                 errorLabel.text = ""
+         }
+-        function onErrorOccurred(errorMessage) {
++        function onErrorOccurredWithTag(errorMessage, tag) {
++            if (pendingHistoryTag === "" || tag !== pendingHistoryTag)
++                return
++            pendingHistoryTag = ""
+             isLoading = false
+             if (errorLabel)
+                 errorLabel.text = errorMessage
+@@ -108,7 +145,7 @@ Page {
+                 id: historyWalletCombo
+                 Layout.preferredWidth: 280
+                 model: walletManager ? walletManager.wallets : []
+-                onActivated: {
++                onActivated: function(index) {
+                     if (walletManager && walletManager.wallets && index >= 0 && index < walletManager.wallets.length) {
+                         selectedWallet = walletManager.wallets[index]
+                         refreshHistory()
+diff --git a/qbitx-gui/qml/pages/Logs.qml b/qbitx-gui/qml/pages/Logs.qml
+index d3bfaa0..9b31f2b 100644
+--- a/qbitx-gui/qml/pages/Logs.qml
++++ b/qbitx-gui/qml/pages/Logs.qml
+@@ -8,9 +8,10 @@ Page {
+     id: logsPage
+     background: Rectangle { color: "transparent" }
+ 
+-    property bool atBottom: true
++    property bool atTop: true
+ 
+     function refresh() {
++        Qt.callLater(scrollView.scrollToTop)
+     }
+ 
+     QbxPageLayout {
+@@ -40,19 +41,22 @@ Page {
+         QbxCard {
+             Layout.fillWidth: true
+             Layout.fillHeight: true
+-            title: "Application log"
++            title: "Application log · newest first"
+ 
+             ScrollView {
+                 id: scrollView
+                 Layout.fillWidth: true
+                 Layout.preferredHeight: 400
+                 clip: true
++                contentWidth: availableWidth
++                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+ 
+                 TextArea {
+                     id: logArea
++                    width: scrollView.availableWidth
+                     readOnly: true
+                     selectByMouse: true
+-                    wrapMode: TextEdit.NoWrap
++                    wrapMode: TextEdit.WrapAnywhere
+                     font.pixelSize: 12
+                     font.family: "Consolas,Courier New,monospace"
+                     color: QbxTheme.textPrimary
+@@ -66,32 +70,28 @@ Page {
+                     Connections {
+                         target: logManager
+                         function onLogTextChanged() {
+-                            if (logsPage.atBottom)
+-                                Qt.callLater(scrollView.scrollToBottom)
++                            if (logsPage.atTop)
++                                Qt.callLater(scrollView.scrollToTop)
+                         }
+                     }
+                 }
+ 
+                 Component.onCompleted: {
+                     if (contentItem) {
+-                        contentItem.contentYChanged.connect(updateAtBottom)
+-                        contentItem.contentHeightChanged.connect(updateAtBottom)
++                        contentItem.contentYChanged.connect(updateAtTop)
++                        contentItem.contentHeightChanged.connect(updateAtTop)
+                     }
+                 }
+ 
+-                function updateAtBottom() {
++                function updateAtTop() {
+                     if (!contentItem) return
+                     var fy = contentItem.contentY
+-                    var fh = contentItem.contentHeight
+-                    var vh = contentItem.height
+-                    logsPage.atBottom = (fh <= vh) || (fy >= fh - vh - 2)
++                    logsPage.atTop = fy <= 2
+                 }
+ 
+-                function scrollToBottom() {
++                function scrollToTop() {
+                     if (!contentItem) return
+-                    contentItem.contentY = contentItem.contentHeight - contentItem.height
+-                    if (contentItem.contentY < 0)
+-                        contentItem.contentY = 0
++                    contentItem.contentY = 0
+                 }
+             }
+         }
+diff --git a/qbitx-gui/qml/pages/Send.qml b/qbitx-gui/qml/pages/Send.qml
+index 8a794cb..0f387e4 100644
+--- a/qbitx-gui/qml/pages/Send.qml
++++ b/qbitx-gui/qml/pages/Send.qml
+@@ -16,6 +16,8 @@ Page {
+     property string selectedWallet: ""
+     property string resultLog: ""
+     property string lastCmdLine: ""
++    signal transactionSent(string wallet)
++
+     property bool pendingSend: false
+     property string pendingSendTag: ""
+     property string fromBalanceText: ""
+@@ -49,7 +51,7 @@ Page {
+         if (isNaN(c)) c = 0
+         if (isNaN(u)) u = 0
+         if (isNaN(im)) im = 0
+-        return c + u + im
++        return c
+     }
+ 
+     function shortAddress(addr) {
+@@ -212,7 +214,7 @@ Page {
+         var addr = getFromAddress()
+         if (!addr || addr === "") {
+             fromBalanceText = fundedFromAddresses.length === 0 && selectedWallet !== "" && !isLoadingBalances
+-                    ? "No funded addresses found for this wallet."
++                    ? "No confirmed funds available. Check History for pending transactions."
+                     : "Select a from address"
+             return
+         }
+@@ -223,7 +225,7 @@ Page {
+                 var u = (b.unconfirmed !== undefined) ? b.unconfirmed : 0
+                 var im = (b.immature !== undefined) ? b.immature : 0
+                 var t = c + u + im
+-                fromBalanceText = "Confirmed " + formatQbx(c) + " · Unconfirmed " + formatQbx(u) + " · Total " + formatQbx(t) + " QBX"
++                fromBalanceText = "Available (confirmed) " + formatQbx(c) + " · Unconfirmed " + formatQbx(u) + " · Total " + formatQbx(t) + " QBX"
+                 return
+             }
+         }
+@@ -253,7 +255,7 @@ Page {
+ 
+         cliBridge.callNamedWithTag("getaddressbalances", {
+             "minconf": 1,
+-            "include_unsafe": true
++            "include_unsafe": false
+         }, selectedWallet, "sendbal:" + selectedWallet)
+     }
+ 
+@@ -373,6 +375,33 @@ Page {
+         return lines[0] ? lines[0].trim() : errorMessage
+     }
+ 
++    function sendResultText(result) {
++        var txids = []
++        if (typeof result === "string")
++            txids = [result]
++        else if (result && typeof result === "object") {
++            if (Array.isArray(result.txids))
++                txids = result.txids
++            else if (result.txid !== undefined)
++                txids = [result.txid]
++        }
++        if (txids.length === 0)
++            return ""
++        for (var i = 0; i < txids.length; i++) {
++            if (typeof txids[i] !== "string" || !/^[0-9a-fA-F]{64}$/.test(txids[i]))
++                return ""
++        }
++        var summary = "SUCCESS\nBroadcast " + txids.length + (txids.length === 1 ? " transaction." : " transactions.")
++                    + " Waiting for confirmations."
++        if (result && typeof result === "object") {
++            if (result.total_sent !== undefined)
++                summary += "\nSent: " + formatQbx(result.total_sent) + " QBX"
++            if (result.total_fee !== undefined)
++                summary += "\nFee: " + formatQbx(result.total_fee) + " QBX"
++        }
++        return summary + (txids.length === 1 ? "\nTXID:\n" : "\nTXIDs:\n") + txids.join("\n")
++    }
++
+     function resetSendingState() {
+         pendingSend = false
+         pendingSendTag = ""
+@@ -380,6 +409,8 @@ Page {
+     }
+ 
+     function sendTransaction() {
++        if (isSending || pendingSend || isLoadingBalances)
++            return
+         if (!settingsManager || settingsManager.qbitxCliPath === "")
+             return
+         var fromAddr = getFromAddress()
+@@ -407,7 +438,7 @@ Page {
+         var normalizedAmount = normalizedAmountText()
+         lastCmdLine = "qbitx-cli -rpcwallet=" + selectedWallet + " pqsendtoaddress \"" + fromAddr + "\" \"" + toAddr + "\" " + normalizedAmount + " " + feeMode
+         resultLog = "Sending transaction…"
+-        pendingSendTag = "pqsend:" + selectedWallet
++        pendingSendTag = "pqsend:" + selectedWallet + ":" + Date.now()
+         pendingSend = true
+         isSending = true
+         cliBridge.callWithTag("pqsendtoaddress", [fromAddr, toAddr, normalizedAmount, feeMode], selectedWallet, pendingSendTag)
+@@ -441,30 +472,18 @@ Page {
+ 
+     Connections {
+         target: cliBridge
+-        function onSuccess(result) {
+-            if (!(pendingSend || isSending))
+-                return
+-            resetSendingState()
+-            var txid = ""
+-            if (typeof result === "string")
+-                txid = result
+-            else if (result && typeof result === "object" && result.txid !== undefined)
+-                txid = result.txid
+-            else
+-                txid = (result && result.txid) ? result.txid : JSON.stringify(result)
+-            resultLog = "SUCCESS\nTXID:\n" + txid
+-        }
+         function onSuccessWithTag(result, tag) {
+             if (tag === pendingSendTag && (pendingSend || isSending)) {
+                 resetSendingState()
+-                var txid = ""
+-                if (typeof result === "string")
+-                    txid = result
+-                else if (result && typeof result === "object" && result.txid !== undefined)
+-                    txid = result.txid
+-                else
+-                    txid = (result && result.txid) ? result.txid : JSON.stringify(result)
+-                resultLog = "SUCCESS\nTXID:\n" + txid
++                var summary = sendResultText(result)
++                if (summary === "") {
++                    resultLog = "ERROR\nSend status unknown: unexpected response. Check transaction history before retrying."
++                } else {
++                    resultLog = summary
++                    amountField.text = ""
++                    transactionSent(selectedWallet)
++                }
++                loadAddressBalances()
+                 return
+             }
+             if (selectedWallet === "")
+@@ -482,16 +501,12 @@ Page {
+                 return
+             }
+         }
+-        function onErrorOccurred(errorMessage) {
+-            if (!(pendingSend || isSending))
+-                return
+-            resetSendingState()
+-            resultLog = "ERROR\n" + simplifyCliError(errorMessage)
+-        }
+         function onErrorOccurredWithTag(errorMessage, tag) {
+             if (tag === pendingSendTag && (pendingSend || isSending)) {
+                 resetSendingState()
+                 resultLog = "ERROR\n" + simplifyCliError(errorMessage)
++                          + "\nCheck transaction history before retrying; a batch may have been partially broadcast."
++                loadAddressBalances()
+                 return
+             }
+             if (selectedWallet === "")
+@@ -506,7 +521,8 @@ Page {
+                 _balListResult = { by_address: [] }
+                 _balDone = true
+                 fromBalanceError = true
+-                resultLog = "ERROR (balance load): " + errorMessage
++                if (resultLog === "")
++                    resultLog = "ERROR (balance load): " + errorMessage
+                 tryApplyMergedAddresses()
+                 updateFromBalanceText()
+             }
+@@ -623,11 +639,12 @@ Page {
+                     }
+                     QbxComboBox {
+                         id: sendWalletCombo
++                        enabled: !isSending
+                         Layout.fillWidth: true
+                         Layout.maximumWidth: 360
+                         Layout.preferredHeight: QbxTheme.formRowHeight
+                         model: walletManager ? walletManager.wallets : []
+-                        onActivated: {
++                        onActivated: function(index) {
+                             if (walletManager && walletManager.wallets && index >= 0 && index < walletManager.wallets.length) {
+                                 var w = walletManager.wallets[index]
+                                 if (w !== selectedWallet) {
+@@ -660,7 +677,7 @@ Page {
+                         Layout.fillWidth: true
+                         Layout.maximumWidth: 640
+                         Layout.preferredHeight: QbxTheme.formRowHeight
+-                        enabled: fundedFromAddresses.length > 0 && !isLoadingBalances
++                        enabled: fundedFromAddresses.length > 0 && !isLoadingBalances && !isSending
+                         model: fundedFromAddresses
+                         textRole: "label"
+                         onCurrentIndexChanged: updateFromBalanceText()
+@@ -777,22 +794,30 @@ Page {
+             compact: true
+             title: "Result"
+ 
+-            TextArea {
++            ScrollView {
++                id: receiptScroll
++                contentWidth: availableWidth
+                 Layout.fillWidth: true
+-                Layout.preferredHeight: 120
+-                readOnly: true
+-                text: resultLog
+-                wrapMode: TextArea.WrapAnywhere
+-                color: resultLog.indexOf("ERROR") === 0 ? QbxTheme.error : QbxTheme.textPrimary
+-                font.pixelSize: 12
+-                font.family: "Consolas,Courier New,monospace"
+-                background: Rectangle {
+-                    color: QbxTheme.bgInput
+-                    radius: QbxTheme.radiusSmall
+-                    border.color: QbxTheme.border
++                Layout.preferredHeight: 160
++                clip: true
++                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
++                TextArea {
++                    width: receiptScroll.availableWidth
++                    selectByMouse: true
++                    readOnly: true
++                    text: resultLog
++                    wrapMode: TextArea.WrapAnywhere
++                    color: resultLog.indexOf("ERROR") === 0 ? QbxTheme.error : QbxTheme.textPrimary
++                    font.pixelSize: 12
++                    font.family: "Consolas,Courier New,monospace"
++                    background: Rectangle {
++                        color: QbxTheme.bgInput
++                        radius: QbxTheme.radiusSmall
++                        border.color: QbxTheme.border
++                    }
++                    placeholderText: "TXID or error will appear here…"
++                    placeholderTextColor: QbxTheme.textMuted
+                 }
+-                placeholderText: "TXID or error will appear here…"
+-                placeholderTextColor: QbxTheme.textMuted
+             }
+         }
+     }
+diff --git a/qbitx-gui/qml/pages/Wallets.qml b/qbitx-gui/qml/pages/Wallets.qml
+index 6be0208..60d9387 100644
+--- a/qbitx-gui/qml/pages/Wallets.qml
++++ b/qbitx-gui/qml/pages/Wallets.qml
+@@ -140,7 +140,7 @@ Page {
+         QbxCard {
+             Layout.fillWidth: true
+             compact: true
+-            title: "Loaded Wallets"
++            title: "Loaded wallets"
+ 
+             ColumnLayout {
+                 Layout.fillWidth: true
+@@ -151,7 +151,7 @@ Page {
+                     model: walletManager && walletManager.wallets ? walletManager.wallets : []
+                     delegate: Rectangle {
+                         Layout.fillWidth: true
+-                        Layout.preferredHeight: 44
++                        Layout.preferredHeight: 58
+                         radius: QbxTheme.radiusSmall
+                         color: Qt.rgba(QbxTheme.accent.r, QbxTheme.accent.g, QbxTheme.accent.b, 0.08)
+                         border.color: QbxTheme.border
+@@ -182,7 +182,7 @@ Page {
+                             Text {
+                                 text: walletManager.wallets.length === 1 ? "Active" : "Loaded"
+                                 font.pixelSize: 11
+-                                color: QbxTheme.accentGlow
++                                color: QbxTheme.success
+                             }
+                         }
+                     }
+diff --git a/qbitx-gui/qml/theme/QbxTheme.qml b/qbitx-gui/qml/theme/QbxTheme.qml
+index 5670292..326f1d7 100644
+--- a/qbitx-gui/qml/theme/QbxTheme.qml
++++ b/qbitx-gui/qml/theme/QbxTheme.qml
+@@ -2,43 +2,43 @@ pragma Singleton
+ import QtQuick
+ 
+ QtObject {
+-    readonly property color bgApp: "#0b0f14"
+-    readonly property color bgSidebar: "#070a0f"
+-    readonly property color bgContent: "#0d1219"
+-    readonly property color bgCard: "#141c28"
+-    readonly property color bgInput: "#1a2433"
+-    readonly property color bgHover: "#1e2a3d"
+-    readonly property color bgActive: "#243247"
++    readonly property color bgApp: "#0a101c"
++    readonly property color bgSidebar: "#0b1322"
++    readonly property color bgContent: "#0e1726"
++    readonly property color bgCard: "#152136"
++    readonly property color bgInput: "#192840"
++    readonly property color bgHover: "#213451"
++    readonly property color bgActive: "#294265"
+ 
+-    readonly property color border: "#2a3a52"
+-    readonly property color borderLight: "#3d5270"
++    readonly property color border: "#293b55"
++    readonly property color borderLight: "#456488"
+ 
+-    readonly property color accent: "#00bcd4"
+-    readonly property color accentDim: "#0097a7"
+-    readonly property color accentGlow: "#4dd0e1"
++    readonly property color accent: "#4388ff"
++    readonly property color accentDim: "#2e6cdb"
++    readonly property color accentGlow: "#8ab8ff"
+ 
+-    readonly property color textPrimary: "#e8eef5"
+-    readonly property color textSecondary: "#9aa8bc"
+-    readonly property color textMuted: "#6b7a90"
++    readonly property color textPrimary: "#edf3ff"
++    readonly property color textSecondary: "#a2b3cd"
++    readonly property color textMuted: "#7389a8"
+ 
+-    readonly property color success: "#3ddc84"
++    readonly property color success: "#47d8a1"
+     readonly property color error: "#ff6b6b"
+     readonly property color warning: "#ffc857"
+     readonly property color info: "#64b5f6"
+ 
+-    readonly property int radiusSmall: 6
+-    readonly property int radiusMedium: 10
+-    readonly property int radiusLarge: 14
++    readonly property int radiusSmall: 10
++    readonly property int radiusMedium: 16
++    readonly property int radiusLarge: 20
+ 
+     readonly property int pagePadding: 32
+     readonly property int pageMargin: pagePadding
+-    readonly property int contentMaxWidth: 860
+-    readonly property int sidebarWidth: 280
++    readonly property int contentMaxWidth: 1120
++    readonly property int sidebarWidth: 244
+     readonly property int controlSpacing: 12
+-    readonly property int actionButtonHeight: 42
++    readonly property int actionButtonHeight: 44
+     readonly property int actionButtonMinWidth: 108
+     readonly property int cardMinHeight: 220
+-    readonly property int dashboardCardHeight: 248
++    readonly property int dashboardCardHeight: 260
+     readonly property int labelColumnWidth: 110
+     readonly property int formRowHeight: 38
+ }
+diff --git a/qbitx-gui/scripts/build-win.sh b/qbitx-gui/scripts/build-win.sh
+index fd5d823..54ee7e0 100755
+--- a/qbitx-gui/scripts/build-win.sh
++++ b/qbitx-gui/scripts/build-win.sh
+@@ -16,6 +16,7 @@ echo "Configuring MinGW build in $BUILD_DIR"
+ cmake -S "$PROJECT_ROOT" -B "$BUILD_DIR" -G Ninja \
+   -DCMAKE_TOOLCHAIN_FILE="$PROJECT_ROOT/cmake/toolchain-mingw64.cmake" \
+   -DCMAKE_BUILD_TYPE=Release \
++  -DQT_TARGET_PATH="$QT_MINGW" \
+   -DQt6_DIR="$QT_MINGW/lib/cmake/Qt6" \
+   -DQT_HOST_PATH="$QT_HOST" \
+   -DQBITX_GUI_DISABLE_VULKAN=ON
+@@ -24,7 +25,7 @@ echo "Building..."
+ cmake --build "$BUILD_DIR" -j"$(nproc)"
+ 
+ echo "Checking for host header leakage (should be empty):"
+-if ninja -C "$BUILD_DIR" -t commands 2>/dev/null | grep -F "/usr/include" || true; then
++if ninja -C "$BUILD_DIR" -t commands 2>/dev/null | grep -F "/usr/include"; then
+   echo "WARNING: Some commands still reference /usr/include"
+ else
+   echo "OK: no /usr/include in compile commands"
+diff --git a/qbitx-gui/scripts/bundle-win.sh b/qbitx-gui/scripts/bundle-win.sh
+index 02849ce..6bd6f47 100755
+--- a/qbitx-gui/scripts/bundle-win.sh
++++ b/qbitx-gui/scripts/bundle-win.sh
+@@ -19,17 +19,25 @@ rm -rf "$BUNDLE_DIR"
+ mkdir -p "$BUNDLE_DIR"
+ cp "$EXE" "$BUNDLE_DIR/"
+ 
+-# Copy embedded node binaries if present next to build output
+-for bin in qbitx qbitx-cli qbitx-tx; do
+-  if [[ -f "$BUILD_DIR/$bin.exe" ]]; then
+-    cp "$BUILD_DIR/$bin.exe" "$BUNDLE_DIR/"
+-  elif [[ -f "$PROJECT_ROOT/../bin/$bin.exe" ]]; then
+-    cp "$PROJECT_ROOT/../bin/$bin.exe" "$BUNDLE_DIR/"
+-  fi
+-done
++# Core v0.4.0 published Windows archive; verify before extracting executables.
++: "${CORE_ARCHIVE:?Set CORE_ARCHIVE to qbitx-v0.4.0-windows.zip}"
++python3 - "$CORE_ARCHIVE" "$BUNDLE_DIR" <<'PY'
++import hashlib, pathlib, sys, zipfile
++archive, destination = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
++expected = "094b5da54c2ccf26fcb156efe60b6df0b5e8c2e27685d67fe9db5cea47900c09"
++if hashlib.sha256(archive.read_bytes()).hexdigest() != expected:
++    raise SystemExit("Core archive SHA-256 mismatch; expected published v0.4.0 Windows archive")
++with zipfile.ZipFile(archive) as package:
++    for name in ("qbitx.exe", "qbitx-cli.exe"):
++        (destination / name).write_bytes(package.read(name))
++PY
+ 
+ echo "Running windeployqt…"
+-"$WINDEPLOYQT" --qmldir "$PROJECT_ROOT/qml" --no-translations "$BUNDLE_DIR/qbitx-gui.exe"
++if command -v wslpath >/dev/null && [[ "$WINDEPLOYQT" == *.exe ]]; then
++  "$WINDEPLOYQT" --qmldir "$(wslpath -w "$PROJECT_ROOT/qml")" --no-translations "$(wslpath -w "$BUNDLE_DIR/qbitx-gui.exe")"
++else
++  "$WINDEPLOYQT" --qmldir "$PROJECT_ROOT/qml" --no-translations "$BUNDLE_DIR/qbitx-gui.exe"
++fi
+ 
+ # Never ship local runtime / wallet / chain data in the installer bundle
+ RUNTIME_PATTERNS=(
+diff --git a/qbitx-gui/settingsmanager.cpp b/qbitx-gui/settingsmanager.cpp
+index b62bf20..3fc2cf1 100644
+--- a/qbitx-gui/settingsmanager.cpp
++++ b/qbitx-gui/settingsmanager.cpp
+@@ -98,6 +98,8 @@ QString SettingsManager::effectiveQbitxCliPath() const
+     QString path;
+     if (!env.isEmpty())
+         path = QString::fromUtf8(env).trimmed();
++    if (path.isEmpty() && m_useAutoDetectCli)
++        path = discoverQbitxCliExecutable();
+     if (path.isEmpty())
+         path = m_qbitxCliPath;
+     if (path.isEmpty())
+diff --git a/qbitx-gui/windowstyle.h b/qbitx-gui/windowstyle.h
+new file mode 100644
+index 0000000..b4e4b77
+--- /dev/null
++++ b/qbitx-gui/windowstyle.h
+@@ -0,0 +1,39 @@
++#ifndef QBITX_WINDOWSTYLE_H
++#define QBITX_WINDOWSTYLE_H
++
++#include <QWindow>
++#if defined(Q_OS_WIN)
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <windows.h>
++#include <QLibrary>
++#endif
++
++// Keep native resize, snapping and caption buttons; only change frame colors.
++inline bool applyWalletWindowStyle(QWindow *window)
++{
++#if defined(Q_OS_WIN)
++    if (!window) return false;
++    static QLibrary dwm(QStringLiteral("dwmapi"));
++    using SetAttribute = HRESULT (WINAPI *)(HWND, DWORD, LPCVOID, DWORD);
++    auto setAttribute = reinterpret_cast<SetAttribute>(dwm.resolve("DwmSetWindowAttribute"));
++    if (!setAttribute) return false;
++    const HWND handle = reinterpret_cast<HWND>(window->winId());
++    const BOOL dark = TRUE;
++    // Numeric DWM attributes also compile with older MinGW SDK headers.
++    const HRESULT result = setAttribute(handle, 20, &dark, sizeof(dark));
++    const COLORREF caption = RGB(11, 19, 34);
++    const COLORREF text = RGB(237, 243, 255);
++    const COLORREF noBorder = 0xfffffffe;
++    setAttribute(handle, 35, &caption, sizeof(caption));
++    setAttribute(handle, 36, &text, sizeof(text));
++    setAttribute(handle, 34, &noBorder, sizeof(noBorder));
++    return SUCCEEDED(result);
++#else
++    Q_UNUSED(window);
++    return false;
++#endif
++}
++
++#endif
