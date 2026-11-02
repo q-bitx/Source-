@@ -56,8 +56,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3 https://raw.githubusercontent.com/q-bitx/Source-/b69d8247f505b45a47521eab6671ecb2440f8dd2/.github/build/windows-gui-v040.patch -o "$RUNNER_TEMP/gui.patch"
-          echo "b2c08abdd57928736616d1338a218295a1b32be3eefc428a518a91dd9406a88e  $RUNNER_TEMP/gui.patch" | sha256sum --check
+          curl --fail --location --retry 3 https://raw.githubusercontent.com/q-bitx/Source-/fbf959ae97c5a3fc16016ebfc9723381baca4487/.github/build/windows-gui-v040.patch -o "$RUNNER_TEMP/gui.patch"
+          echo "631916921ee9233a18f59981d7ea9f77e0f819d59bc650f08fb51fa773b2923e  $RUNNER_TEMP/gui.patch" | sha256sum --check
           git apply --check "$RUNNER_TEMP/gui.patch"
           git apply "$RUNNER_TEMP/gui.patch"
 
