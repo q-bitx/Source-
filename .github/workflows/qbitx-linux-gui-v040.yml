@@ -193,7 +193,7 @@ jobs:
       - name: Add Linux GUI packages to the existing v0.4.0 release
         shell: bash
         env:
-          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           for asset in "$DEB_FILE" "$TAR_FILE" SHA256SUMS-linux-gui.txt; do
