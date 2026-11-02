@@ -22,7 +22,7 @@ jobs:
     env:
       RELEASE_TAG: v0.4.0
       RELEASE_COMMIT: 23cad23744485d011d9518d5ad2e62c81d9b5ce1
-      CORE_SHA256: 5409df0bd222819500943bfe3aaa90653ae429136c202cd78db7f6570da9f9c2
+      CORE_SHA256: 98b44f169d2dc523126df916d9402baf774d14e37ca07766c1deced02bbab1fb
       DEB_FILE: QBitX-Wallet-0.4.0-ubuntu24.04-amd64.deb
       TAR_FILE: QBitX-Wallet-0.4.0-linux-x86_64.tar.gz
     steps:
@@ -56,8 +56,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3 https://raw.githubusercontent.com/q-bitx/Source-/fbf959ae97c5a3fc16016ebfc9723381baca4487/.github/build/windows-gui-v040.patch -o "$RUNNER_TEMP/gui.patch"
-          echo "631916921ee9233a18f59981d7ea9f77e0f819d59bc650f08fb51fa773b2923e  $RUNNER_TEMP/gui.patch" | sha256sum --check
+          curl --fail --location --retry 3 https://raw.githubusercontent.com/q-bitx/Source-/85e4ff67fa4c87bdd96445bcc5941bfcf01cb34f/.github/build/windows-gui-v040.patch -o "$RUNNER_TEMP/gui.patch"
+          echo "87b301938b2eedc3539d730c92e26482d7cfaba9caefcacd48a85cbd84075752  $RUNNER_TEMP/gui.patch" | sha256sum --check
           git apply --check "$RUNNER_TEMP/gui.patch"
           git apply "$RUNNER_TEMP/gui.patch"
 
@@ -124,6 +124,8 @@ jobs:
               install -m755 "$source_file" "package/opt/qbitx-wallet/$bin"
             fi
           done
+          cp -a core-unpack/lib core-unpack/licenses package/opt/qbitx-wallet/
+          test -f package/opt/qbitx-wallet/lib/libleveldb.so.1d
           for bin in qbitx qbitx-cli; do
             test -x "package/opt/qbitx-wallet/$bin"
             ldd "package/opt/qbitx-wallet/$bin" | tee "$RUNNER_TEMP/$bin-ldd.txt"
@@ -164,6 +166,8 @@ jobs:
           test -x deb-inspection/opt/qbitx-wallet/qbitx
           test -x deb-inspection/opt/qbitx-wallet/qbitx-cli
           test -f deb-inspection/usr/share/applications/qbitx-wallet.desktop
+          test -f deb-inspection/opt/qbitx-wallet/lib/libleveldb.so.1d
+          test -f deb-inspection/opt/qbitx-wallet/lib/libsnappy.so.1
 
           mkdir -p tar-package/QBitX-Wallet-0.4.0-linux-x86_64
           cp -a package/opt/qbitx-wallet/. tar-package/QBitX-Wallet-0.4.0-linux-x86_64/
@@ -181,6 +185,9 @@ jobs:
           To use this extracted archive instead, install Qt6 Core, GUI,
           Widgets, QML, Quick and Network runtimes plus the QtQuick,
           QtQuick.Controls, QtQuick.Layouts and QtQml QML modules.
+          Core uses private LevelDB, Snappy, libevent and SQLite libraries in lib/.
+          Keep lib/ and licenses/ with the executables; no system LevelDB package
+          or LD_LIBRARY_PATH is needed. Linux glibc 2.38 or newer is required.
           Then run: ./qbitx-gui
 
           Existing wallet and blockchain data are stored separately from
