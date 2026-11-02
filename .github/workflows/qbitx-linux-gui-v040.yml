@@ -56,8 +56,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3 https://raw.githubusercontent.com/q-bitx/Source-/ba35cd2fec4b8e33d2286681f1ff07d79f40a9f4/.github/build/windows-gui-v040.patch -o "$RUNNER_TEMP/gui.patch"
-          echo "108b3bee92a982192eb9365918775470ade978cdcf5ca866f27e2939a6a65bb8  $RUNNER_TEMP/gui.patch" | sha256sum --check
+          curl --fail --location --retry 3 https://raw.githubusercontent.com/q-bitx/Source-/b69d8247f505b45a47521eab6671ecb2440f8dd2/.github/build/windows-gui-v040.patch -o "$RUNNER_TEMP/gui.patch"
+          echo "b2c08abdd57928736616d1338a218295a1b32be3eefc428a518a91dd9406a88e  $RUNNER_TEMP/gui.patch" | sha256sum --check
           git apply --check "$RUNNER_TEMP/gui.patch"
           git apply "$RUNNER_TEMP/gui.patch"
 
@@ -206,13 +206,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          for asset in "$DEB_FILE" "$TAR_FILE" SHA256SUMS-linux-gui.txt; do
-            if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[].name' | grep -Fxq "$asset"; then
-              echo "Preserving existing release asset: $asset"
-            else
-              gh release upload "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY"
-            fi
-          done
+          # Only these GUI assets are replaced; Core and Windows uploads are separate.
+          gh release upload "$RELEASE_TAG" "$DEB_FILE" "$TAR_FILE" SHA256SUMS-linux-gui.txt --clobber --repo "$GITHUB_REPOSITORY"
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json body --jq .body > "$RUNNER_TEMP/release-notes.md"
           if ! grep -Fq '## Linux desktop wallet (x86-64)' "$RUNNER_TEMP/release-notes.md"; then
