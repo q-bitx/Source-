@@ -1,0 +1,229 @@
+name: Q-BitX v0.4.0 Linux GUI wallet
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/qbitx-linux-gui-v040.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: qbitx-linux-gui-v040
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Build, smoke-test, and attach Linux GUI packages
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      RELEASE_TAG: v0.4.0
+      RELEASE_COMMIT: 23cad23744485d011d9518d5ad2e62c81d9b5ce1
+      CORE_SHA256: 5409df0bd222819500943bfe3aaa90653ae429136c202cd78db7f6570da9f9c2
+      DEB_FILE: QBitX-Wallet-0.4.0-ubuntu22.04-amd64.deb
+      TAR_FILE: QBitX-Wallet-0.4.0-linux-x86_64.tar.gz
+    steps:
+      - name: Checkout the exact v0.4.0 source
+        uses: actions/checkout@v4
+        with:
+          ref: v0.4.0
+          persist-credentials: false
+
+      - name: Verify release tag has not changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+
+      - name: Install Qt 6, QML modules, packaging and smoke-test tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config file curl ca-certificates \
+            qt6-base-dev qt6-declarative-dev \
+            qml6-module-qtquick qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts qml6-module-qtquick-window \
+            qml6-module-qtqml-workerscript qml6-module-qtqml-models \
+            qml6-module-qtquick-templates \
+            libgl1-mesa-dev xvfb xauth dpkg-dev
+
+      - name: Build the same Qt/QML GUI as Windows v0.4.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S qbitx-gui -B build-linux-gui -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DQBITX_GUI_DISABLE_VULKAN=ON
+          cmake --build build-linux-gui --parallel 2
+          test -x build-linux-gui/qbitx-gui
+          file build-linux-gui/qbitx-gui
+          ldd build-linux-gui/qbitx-gui | tee "$RUNNER_TEMP/gui-ldd.txt"
+          ! grep -q 'not found' "$RUNNER_TEMP/gui-ldd.txt"
+
+      - name: Smoke-test Qt/QML startup in a clean isolated HOME
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/gui-smoke-home"
+          set +e
+          timeout --signal=TERM --kill-after=2s 15s \
+            xvfb-run -a env HOME="$RUNNER_TEMP/gui-smoke-home" \
+            QT_QUICK_BACKEND=software \
+            "$GITHUB_WORKSPACE/build-linux-gui/qbitx-gui" \
+            > "$RUNNER_TEMP/gui-smoke.log" 2>&1
+          result=$?
+          set -e
+          cat "$RUNNER_TEMP/gui-smoke.log"
+          if [ "$result" -ne 124 ]; then
+            echo "Unexpected GUI exit: $result" >&2
+            exit 1
+          fi
+          if grep -Eiq 'QQmlApplicationEngine failed|QML root window was not created|module .* is not installed|could not load the Qt platform plugin' "$RUNNER_TEMP/gui-smoke.log"; then
+            echo 'QML startup error' >&2
+            exit 1
+          fi
+
+      - name: Download and verify existing Linux Core v0.4.0 binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p core-unpack
+          curl --fail --location --retry 3 \
+            "https://github.com/q-bitx/Source-/releases/download/$RELEASE_TAG/qbitx-v0.4.0-linux.tar.gz" \
+            -o "$RUNNER_TEMP/qbitx-v0.4.0-linux.tar.gz"
+          echo "$CORE_SHA256  $RUNNER_TEMP/qbitx-v0.4.0-linux.tar.gz" | sha256sum --check --status
+          tar -xzf "$RUNNER_TEMP/qbitx-v0.4.0-linux.tar.gz" -C core-unpack
+          find core-unpack -type f \( -name qbitx -o -name qbitx-cli -o -name qbitx-tx \) -print
+          for bin in qbitx qbitx-cli; do
+            test "$(find core-unpack -type f -name "$bin" | wc -l)" -eq 1
+          done
+
+      - name: Package the desktop wallet with matching Core + CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -Dm755 build-linux-gui/qbitx-gui package/opt/qbitx-wallet/qbitx-gui
+          for bin in qbitx qbitx-cli qbitx-tx; do
+            source_file="$(find core-unpack -type f -name "$bin" -print -quit)"
+            if [ -n "$source_file" ]; then
+              install -m755 "$source_file" "package/opt/qbitx-wallet/$bin"
+            fi
+          done
+          for bin in qbitx qbitx-cli; do
+            test -x "package/opt/qbitx-wallet/$bin"
+            ldd "package/opt/qbitx-wallet/$bin" | tee "$RUNNER_TEMP/$bin-ldd.txt"
+            ! grep -q 'not found' "$RUNNER_TEMP/$bin-ldd.txt"
+          done
+          install -Dm644 qbitx-gui/assets/sidebar_logo.png package/usr/share/pixmaps/qbitx-wallet.png
+          mkdir -p package/usr/share/applications package/DEBIAN
+          cat > package/usr/share/applications/qbitx-wallet.desktop <<'EOF'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=Q-BitX Wallet
+          Comment=Q-BitX post-quantum desktop wallet and Core node
+          Exec=/opt/qbitx-wallet/qbitx-gui
+          Icon=qbitx-wallet
+          Terminal=false
+          Categories=Finance;Network;
+          StartupNotify=true
+          EOF
+          cat > package/DEBIAN/control <<'EOF'
+          Package: qbitx-wallet
+          Version: 0.4.0
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Q-BitX Development Team
+          Depends: libc6, libstdc++6, libqt6core6 (>= 6.2), libqt6gui6 (>= 6.2), libqt6network6 (>= 6.2), libqt6qml6 (>= 6.2), libqt6quick6 (>= 6.2), libqt6widgets6 (>= 6.2), qml6-module-qtquick, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-window, qml6-module-qtqml-workerscript, qml6-module-qtqml-models, qml6-module-qtquick-templates
+          Description: Q-BitX 0.4.0 Qt6 GUI wallet with bundled Core node
+           Installs the official Q-BitX v0.4.0 Qt/QML desktop wallet and
+           matching qbitx and qbitx-cli executables. The existing blockchain
+           and wallet directories in the user's HOME are preserved.
+          EOF
+          dpkg-deb --build --root-owner-group package "$DEB_FILE"
+          dpkg-deb --info "$DEB_FILE"
+          mkdir -p deb-inspection
+          dpkg-deb --extract "$DEB_FILE" deb-inspection
+          test -x deb-inspection/opt/qbitx-wallet/qbitx-gui
+          test -x deb-inspection/opt/qbitx-wallet/qbitx
+          test -x deb-inspection/opt/qbitx-wallet/qbitx-cli
+          test -f deb-inspection/usr/share/applications/qbitx-wallet.desktop
+
+          mkdir -p tar-package/QBitX-Wallet-0.4.0-linux-x86_64
+          cp -a package/opt/qbitx-wallet/. tar-package/QBitX-Wallet-0.4.0-linux-x86_64/
+          cat > tar-package/QBitX-Wallet-0.4.0-linux-x86_64/README-LINUX.txt <<'EOF'
+          Q-BitX Wallet v0.4.0 - Linux x86_64
+
+          This package contains the Qt6 QML desktop wallet plus matching
+          Q-BitX Core and CLI binaries. It does NOT contain wallet keys,
+          blockchain state, or data directories.
+
+          Ubuntu 22.04 or newer / Debian-family systems: the .deb package
+          is recommended because APT resolves the required Qt 6 libraries.
+          Install with: sudo apt install ./QBitX-Wallet-0.4.0-ubuntu22.04-amd64.deb
+
+          To use this extracted archive instead, install Qt6 Core, GUI,
+          Widgets, QML, Quick and Network runtimes plus the QtQuick,
+          QtQuick.Controls, QtQuick.Layouts and QtQml QML modules.
+          Then run: ./qbitx-gui
+
+          Existing wallet and blockchain data are stored separately from
+          this application directory. Back up your wallet before upgrading.
+          This is a GUI for x86_64 Linux, not an ARM or universal AppImage.
+          EOF
+          tar -C tar-package -czf "$TAR_FILE" QBitX-Wallet-0.4.0-linux-x86_64
+          sha256sum "$DEB_FILE" "$TAR_FILE" > SHA256SUMS-linux-gui.txt
+
+      - name: Publish build artifacts for independent inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: qbitx-v0.4.0-linux-gui
+          path: |
+            QBitX-Wallet-0.4.0-ubuntu22.04-amd64.deb
+            QBitX-Wallet-0.4.0-linux-x86_64.tar.gz
+            SHA256SUMS-linux-gui.txt
+          if-no-files-found: error
+
+      - name: Add Linux GUI packages to the existing v0.4.0 release
+        shell: bash
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for asset in "$DEB_FILE" "$TAR_FILE" SHA256SUMS-linux-gui.txt; do
+            if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+              --jq '.assets[].name' | grep -Fxq "$asset"; then
+              echo "Refusing to overwrite existing asset: $asset" >&2
+              exit 1
+            fi
+          done
+          gh release upload "$RELEASE_TAG" \
+            "$DEB_FILE" "$TAR_FILE" SHA256SUMS-linux-gui.txt \
+            --repo "$GITHUB_REPOSITORY"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json body --jq .body > "$RUNNER_TEMP/release-notes.md"
+          if ! grep -Fq '## Linux desktop wallet (x86-64)' "$RUNNER_TEMP/release-notes.md"; then
+            cat >> "$RUNNER_TEMP/release-notes.md" <<'EOF'
+
+          ## Linux desktop wallet (x86-64)
+
+          The same Qt 6 / QML desktop GUI as Windows v0.4.0 is available for
+          Linux, bundled with matching, checksum-verified Core v0.4.0 binaries.
+
+          - QBitX-Wallet-0.4.0-ubuntu22.04-amd64.deb: Ubuntu/Debian desktop package.
+          - QBitX-Wallet-0.4.0-linux-x86_64.tar.gz: precompiled bundle,
+            requires Qt 6 runtime libraries and QML modules.
+          - SHA256SUMS-linux-gui.txt: checksums for both Linux GUI packages.
+
+          Back up your wallet before upgrading. Preserve ~/.qbitx and all wallet
+          data. This package does not provide Linux ARM or AppImage binaries.
+          EOF
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
