@@ -17,13 +17,13 @@ concurrency:
 jobs:
   build-and-publish:
     name: Build, smoke-test, and attach Linux GUI packages
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       RELEASE_TAG: v0.4.0
       RELEASE_COMMIT: 23cad23744485d011d9518d5ad2e62c81d9b5ce1
       CORE_SHA256: 5409df0bd222819500943bfe3aaa90653ae429136c202cd78db7f6570da9f9c2
-      DEB_FILE: QBitX-Wallet-0.4.0-ubuntu22.04-amd64.deb
+      DEB_FILE: QBitX-Wallet-0.4.0-ubuntu24.04-amd64.deb
       TAR_FILE: QBitX-Wallet-0.4.0-linux-x86_64.tar.gz
     steps:
       - name: Checkout the exact v0.4.0 source
@@ -46,11 +46,20 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config file curl ca-certificates \
             qt6-base-dev qt6-declarative-dev libqt6opengl6-dev \
-            qml6-module-qtquick qml6-module-qtquick-controls \
+            qml6-module-qtcore qml6-module-qtquick qml6-module-qtquick-controls \
             qml6-module-qtquick-layouts qml6-module-qtquick-window \
             qml6-module-qtqml-workerscript qml6-module-qtqml-models \
             qml6-module-qtquick-templates \
             libgl1-mesa-dev xvfb xauth dpkg-dev
+
+      - name: Apply the published Windows v0.4.0 GUI source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://raw.githubusercontent.com/q-bitx/Source-/ba35cd2fec4b8e33d2286681f1ff07d79f40a9f4/.github/build/windows-gui-v040.patch -o "$RUNNER_TEMP/gui.patch"
+          echo "108b3bee92a982192eb9365918775470ade978cdcf5ca866f27e2939a6a65bb8  $RUNNER_TEMP/gui.patch" | sha256sum --check
+          git apply --check "$RUNNER_TEMP/gui.patch"
+          git apply "$RUNNER_TEMP/gui.patch"
 
       - name: Build the same Qt/QML GUI as Windows v0.4.0
         shell: bash
@@ -72,12 +81,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/gui-smoke-home"
           set +e
           timeout --signal=TERM --kill-after=2s 15s \
-            xvfb-run -a env HOME="$RUNNER_TEMP/gui-smoke-home" \
+            env HOME="$RUNNER_TEMP/gui-smoke-home" TMPDIR="$RUNNER_TEMP/gui-smoke-home" QT_QPA_PLATFORM=offscreen \
             QT_QUICK_BACKEND=software \
             "$GITHUB_WORKSPACE/build-linux-gui/qbitx-gui" \
             > "$RUNNER_TEMP/gui-smoke.log" 2>&1
           result=$?
           set -e
+          find "$RUNNER_TEMP/gui-smoke-home" -type f -name 'qbitx-gui*.log' -exec cat {} + >> "$RUNNER_TEMP/gui-smoke.log"
           cat "$RUNNER_TEMP/gui-smoke.log"
           if [ "$result" -ne 124 ]; then
             echo "Unexpected GUI exit: $result" >&2
@@ -140,7 +150,7 @@ jobs:
           Priority: optional
           Architecture: amd64
           Maintainer: Q-BitX Development Team
-          Depends: libc6, libstdc++6, libqt6core6 (>= 6.2), libqt6gui6 (>= 6.2), libqt6network6 (>= 6.2), libqt6qml6 (>= 6.2), libqt6quick6 (>= 6.2), libqt6widgets6 (>= 6.2), qml6-module-qtquick, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-window, qml6-module-qtqml-workerscript, qml6-module-qtqml-models, qml6-module-qtquick-templates
+          Depends: libc6 (>= 2.38), libstdc++6, libqt6core6t64 (>= 6.4), libqt6gui6t64 (>= 6.4), libqt6network6t64 (>= 6.4), libqt6qml6 (>= 6.4), libqt6quick6 (>= 6.4), libqt6widgets6t64 (>= 6.4), qt6-qpa-plugins, qml6-module-qtcore, qml6-module-qtquick, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-window, qml6-module-qtqml-workerscript, qml6-module-qtqml-models, qml6-module-qtquick-templates
           Description: Q-BitX 0.4.0 Qt6 GUI wallet with bundled Core node
            Installs the official Q-BitX v0.4.0 Qt/QML desktop wallet and
            matching qbitx and qbitx-cli executables. The existing blockchain
@@ -164,9 +174,9 @@ jobs:
           Q-BitX Core and CLI binaries. It does NOT contain wallet keys,
           blockchain state, or data directories.
 
-          Ubuntu 22.04 or newer / Debian-family systems: the .deb package
+          Ubuntu 24.04 or newer / Debian-family systems: the .deb package
           is recommended because APT resolves the required Qt 6 libraries.
-          Install with: sudo apt install ./QBitX-Wallet-0.4.0-ubuntu22.04-amd64.deb
+          Install with: sudo apt install ./QBitX-Wallet-0.4.0-ubuntu24.04-amd64.deb
 
           To use this extracted archive instead, install Qt6 Core, GUI,
           Widgets, QML, Quick and Network runtimes plus the QtQuick,
@@ -185,7 +195,7 @@ jobs:
         with:
           name: qbitx-v0.4.0-linux-gui
           path: |
-            QBitX-Wallet-0.4.0-ubuntu22.04-amd64.deb
+            QBitX-Wallet-0.4.0-ubuntu24.04-amd64.deb
             QBitX-Wallet-0.4.0-linux-x86_64.tar.gz
             SHA256SUMS-linux-gui.txt
           if-no-files-found: error
@@ -197,15 +207,12 @@ jobs:
         run: |
           set -euo pipefail
           for asset in "$DEB_FILE" "$TAR_FILE" SHA256SUMS-linux-gui.txt; do
-            if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-              --jq '.assets[].name' | grep -Fxq "$asset"; then
-              echo "Refusing to overwrite existing asset: $asset" >&2
-              exit 1
+            if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[].name' | grep -Fxq "$asset"; then
+              echo "Preserving existing release asset: $asset"
+            else
+              gh release upload "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY"
             fi
           done
-          gh release upload "$RELEASE_TAG" \
-            "$DEB_FILE" "$TAR_FILE" SHA256SUMS-linux-gui.txt \
-            --repo "$GITHUB_REPOSITORY"
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json body --jq .body > "$RUNNER_TEMP/release-notes.md"
           if ! grep -Fq '## Linux desktop wallet (x86-64)' "$RUNNER_TEMP/release-notes.md"; then
@@ -216,7 +223,7 @@ jobs:
           The same Qt 6 / QML desktop GUI as Windows v0.4.0 is available for
           Linux, bundled with matching, checksum-verified Core v0.4.0 binaries.
 
-          - QBitX-Wallet-0.4.0-ubuntu22.04-amd64.deb: Ubuntu/Debian desktop package.
+          - QBitX-Wallet-0.4.0-ubuntu24.04-amd64.deb: Ubuntu/Debian desktop package.
           - QBitX-Wallet-0.4.0-linux-x86_64.tar.gz: precompiled bundle,
             requires Qt 6 runtime libraries and QML modules.
           - SHA256SUMS-linux-gui.txt: checksums for both Linux GUI packages.
