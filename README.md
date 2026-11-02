@@ -1,5 +1,7 @@
 # ⚛️ Q-BitX (QBX)
 
+[Website](https://qbitx.org/) · [Mining pool](https://mining.qbitx.org/) · [Pools & statistics](https://pools.qbitx.org/) · [Block explorer](https://explorer.qbitx.org/) · [Wallet downloads](https://github.com/q-bitx/Source-/releases/latest) · [Telegram community](https://t.me/qbxchat)
+
 **Q-BitX (QBX)** is a next-generation Proof-of-Work blockchain built for long-term security in the post-quantum era.
 
 It keeps classic **SHA256d Proof-of-Work** mining while adding **Dilithium / ML-DSA post-quantum signatures** into script validation and wallet/RPC workflows.
@@ -74,24 +76,32 @@ Users, miners, pools and exchanges should keep nodes updated, monitor activation
 
 ---
 
-## 📦 Downloads
+## 📦 Wallets and downloads
 
-Latest release:
+**[Latest release](https://github.com/q-bitx/Source-/releases/latest)** · **[Q-BitX v0.4.0](https://github.com/q-bitx/Source-/releases/tag/v0.4.0)**
 
-```text
-https://github.com/q-bitx/Source-/releases/latest
-```
+Q-BitX v0.4.0 includes Core and CLI binaries for Linux and Windows, plus the Qt 6 / QML desktop wallet for both platforms.
 
-Check the release assets and SHA256SUMS.txt before installation. The source tree may be newer than the latest published binaries.
+| Package | Download |
+| --- | --- |
+| Windows GUI wallet installer | [QBitX-Wallet-Setup-0.4.0.exe](https://github.com/q-bitx/Source-/releases/download/v0.4.0/QBitX-Wallet-Setup-0.4.0.exe) |
+| Linux GUI wallet — Ubuntu 24.04 amd64 | [QBitX-Wallet-0.4.0-ubuntu24.04-amd64.deb](https://github.com/q-bitx/Source-/releases/download/v0.4.0/QBitX-Wallet-0.4.0-ubuntu24.04-amd64.deb) |
+| Linux GUI wallet — x86-64 archive | [QBitX-Wallet-0.4.0-linux-x86_64.tar.gz](https://github.com/q-bitx/Source-/releases/download/v0.4.0/QBitX-Wallet-0.4.0-linux-x86_64.tar.gz) |
+| Linux Core + CLI — x86-64 | [qbitx-v0.4.0-linux.tar.gz](https://github.com/q-bitx/Source-/releases/download/v0.4.0/qbitx-v0.4.0-linux.tar.gz) |
+| Windows Core + CLI — x86-64 | [qbitx-v0.4.0-windows.zip](https://github.com/q-bitx/Source-/releases/download/v0.4.0/qbitx-v0.4.0-windows.zip) |
+| SHA-256 checksums — all packages | [SHA256SUMS.txt](https://github.com/q-bitx/Source-/releases/download/v0.4.0/SHA256SUMS.txt) |
+| SHA-256 checksums — Linux GUI | [SHA256SUMS-linux-gui.txt](https://github.com/q-bitx/Source-/releases/download/v0.4.0/SHA256SUMS-linux-gui.txt) |
 
-Q-BitX Core v0.4.0 is a **command-line release** for Linux and Windows. The Windows GUI wallet and installer are not included; they will be published separately after GUI-specific testing.
+Linux packages require **glibc 2.38 or newer**. The `.deb` targets **Ubuntu 24.04 amd64**. The Linux GUI archive also requires compatible Qt 6 runtime libraries and QML modules; see the README inside the archive.
 
-v0.4.0 release assets:
+Linux Core and GUI packages include private LevelDB, Snappy, libevent and SQLite runtimes. **Keep the `lib/` and `licenses/` directories alongside the executables**; a system `libleveldb.so.1d` package is not required.
 
-```text
-qbitx-v0.4.0-linux.tar.gz
-qbitx-v0.4.0-windows.zip
-SHA256SUMS.txt
+Verify the SHA-256 checksums before installing. Back up your wallet and stop the existing node before upgrading. GUI fixes have been incorporated into the v0.4.0 assets; download the packages again if you have an earlier copy. Changing the data directory in GUI Settings takes effect after fully exiting and restarting the wallet; existing data is not moved automatically.
+
+### Install the Linux GUI on Ubuntu 24.04
+
+```bash
+sudo apt install ./QBitX-Wallet-0.4.0-ubuntu24.04-amd64.deb
 ```
 
 ---
@@ -102,10 +112,10 @@ SHA256SUMS.txt
 
 ```bash
 sudo apt update
-sudo apt install -y unzip wget libevent-2.1-7 libevent-pthreads-2.1-7t64 libleveldb1d
+sudo apt install -y ca-certificates wget tar
 ```
 
-On some Ubuntu versions, package names may differ slightly. If a package is unavailable, install the closest available `libevent` and `leveldb` runtime packages.
+Use a glibc-based Linux system with glibc 2.38 or newer. The current Core archive includes its required LevelDB, Snappy, libevent and SQLite libraries in `lib/`; keep that directory next to `qbitx` and `qbitx-cli`.
 
 ### 2. Download and unpack
 
@@ -173,7 +183,7 @@ qbitx.exe
 qbitx-cli.exe
 ```
 
-A Windows GUI installer will follow in a separate update.
+For the desktop wallet, install [QBitX-Wallet-Setup-0.4.0.exe](https://github.com/q-bitx/Source-/releases/download/v0.4.0/QBitX-Wallet-Setup-0.4.0.exe). The ZIP archive above is for command-line Core and CLI usage.
 
 PowerShell example:
 
@@ -327,6 +337,8 @@ Some inherited Bitcoin Core tests may require additional build options and are n
 ---
 
 ## ⛏️ Mining notes
+
+**[Official mining pool](https://mining.qbitx.org/)** · **[Pool directory and statistics](https://pools.qbitx.org/)** · **[Block explorer](https://explorer.qbitx.org/)**
 
 Q-BitX uses SHA256d Proof-of-Work.
 
