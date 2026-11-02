@@ -46,7 +46,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config file curl ca-certificates \
             qt6-base-dev qt6-declarative-dev libqt6opengl6-dev \
-            qml6-module-qtcore qml6-module-qtquick qml6-module-qtquick-controls \
+            qml6-module-qtcore qml6-module-qtquick qml6-module-qtquick-dialogs qml6-module-qtquick-controls \
             qml6-module-qtquick-layouts qml6-module-qtquick-window \
             qml6-module-qtqml-workerscript qml6-module-qtqml-models \
             qml6-module-qtquick-templates \
@@ -150,7 +150,7 @@ jobs:
           Priority: optional
           Architecture: amd64
           Maintainer: Q-BitX Development Team
-          Depends: libc6 (>= 2.38), libstdc++6, libqt6core6t64 (>= 6.4), libqt6gui6t64 (>= 6.4), libqt6network6t64 (>= 6.4), libqt6qml6 (>= 6.4), libqt6quick6 (>= 6.4), libqt6widgets6t64 (>= 6.4), qt6-qpa-plugins, qml6-module-qtcore, qml6-module-qtquick, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-window, qml6-module-qtqml-workerscript, qml6-module-qtqml-models, qml6-module-qtquick-templates
+          Depends: libc6 (>= 2.38), libstdc++6, libqt6core6t64 (>= 6.4), libqt6gui6t64 (>= 6.4), libqt6network6t64 (>= 6.4), libqt6qml6 (>= 6.4), libqt6quick6 (>= 6.4), libqt6widgets6t64 (>= 6.4), qt6-qpa-plugins, qml6-module-qtcore, qml6-module-qtquick, qml6-module-qtquick-dialogs, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-window, qml6-module-qtqml-workerscript, qml6-module-qtqml-models, qml6-module-qtquick-templates
           Description: Q-BitX 0.4.0 Qt6 GUI wallet with bundled Core node
            Installs the official Q-BitX v0.4.0 Qt/QML desktop wallet and
            matching qbitx and qbitx-cli executables. The existing blockchain
